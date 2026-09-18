@@ -3,7 +3,7 @@ VERSION ?= 0.1.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 PLATFORMS := linux/amd64 darwin/arm64 windows/amd64
 
-.PHONY: all build check test race vet fmt tidy clean run
+.PHONY: all build check test race vet fmt tidy clean run fixtures
 
 all: fmt vet test build
 
@@ -39,6 +39,11 @@ fmt:
 
 tidy:
 	go mod tidy
+
+#regenerate the synthetic geotab fixtures. they are committed, and a test fails
+#if they drift from the generator, so run this after changing it.
+fixtures:
+	go run ./cmd/genfixtures
 
 clean:
 	rm -rf dist
