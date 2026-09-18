@@ -6,15 +6,36 @@ should receive it.
 
 ```yaml
 rules:
-  - match: { severity: [critical, high] }
+  - name: urgent-to-shop
+    match: { severity: [critical, high] }
     route: [my-shop, console]
 
-  - match: { source: replay, spn: [3226, 3216, "4000-4100"] }
+  - name: aftertreatment-watchlist
+    match: { source: replay, spn: [3226, 3216, "4000-4100"] }
     route: [my-shop]
 
-  - match: {}
+  - name: everything-to-console
+    match: {}
     route: [console]
 ```
+
+## Naming a rule
+
+`name` is optional and free-form. It is recorded in the audit log against every
+event the rule routes, which is how "which rule sent this fault to that party"
+is answerable once there are thirty rules rather than three.
+
+Names are not required to be unique. Two rules may reasonably describe one
+concern, and forcing a suffix onto the second would make the label worse, not
+better.
+
+A rule with no name is labelled by its position: `rule[0]`, `rule[1]`. That is
+generated when the config loads, so the audit log never records a blank. The
+position is the rule's own index in the file, not a count of how many rules
+matched.
+
+Positional labels move when rules are reordered. A rule you expect to look up
+later is worth naming.
 
 ## How rules are evaluated
 
@@ -168,9 +189,42 @@ will not improve. A 4xx response other than 408 or 429 is permanent and is not
 retried.
 
 Every one of those outcomes, delivered, failed, and dropped, is written to the
-audit log with the event id, the output, the attempt count, and the reason. An
-owner asking where a particular fault went can answer the question from the
-database rather than from logs.
+audit log with the event id, the output, the rule that chose that output, the
+attempt count, and the reason. An owner asking where a particular fault went can
+answer the question from the database rather than from logs, and the rule label
+answers the follow up question of why.
+
+Two rows carry no rule, because neither ever reached one. An event that matched
+nothing is recorded as a drop with the reason `no matching rule`, and a record an
+adapter could not turn into an event is recorded against its synthetic id.
+
+### One rule gets the credit when several match
+
+Destinations are deduplicated per event, and that does not change here: if two
+rules both route to `my-shop`, the event is delivered to `my-shop` once. The
+audit row names the **first matching rule** that chose that output, because that
+is the rule that put the event in the queue.
+
+So a rule can match an event, contribute nothing new, and appear nowhere in that
+event's audit rows. The alternative would be either duplicate deliveries or an
+audit row implying a delivery that never happened, and both are worse than a
+label that names one rule out of several.
+
+## How long the audit log is kept
+
+Audit rows are kept for `store.audit_retention`, ninety days by default, and
+swept on the same hourly tick as the dedupe set. The window is long because this
+table is evidence rather than working state, and evidence is worth keeping past
+the point where anyone thought to ask for it.
+
+Setting `audit_retention: 0` means never sweep. That is a legitimate choice for
+someone who wants a permanent record, so it is spelled as a retention value
+rather than rejected as a mistake. Growth is then the operator's problem, and the
+database is one file they can see the size of.
+
+Each sweep that removes anything logs at info how many rows it removed. A
+retention policy quietly deleting evidence is the exact thing this table exists
+to prevent, so the deletion is in the log even though nothing went wrong.
 
 ## Deduplication
 
