@@ -187,3 +187,232 @@ unrecognized fields in `tags` with nothing under `fleetnorm.`?
 Is `Annotate()` called, then `Validate()`, before anything is emitted?
 
 Are there table driven tests covering both kinds of failure?
+
+## The Geotab adapter
+
+`internal/adapter/geotab` reads `FaultData` from a MyGeotab `GetFeed` change
+stream. It is the first adapter reading data neither fleetnorm nor the fleet
+owner wrote, so it follows the contract above rather than the file adapter's
+strict default: one unusable record is skipped and audited, and the feed keeps
+moving.
+
+Four things about Geotab's model do not line up with ours, and each one is a
+decision recorded here rather than a surprise in the code.
+
+### event_id carries the version
+
+```
+event_id = "<geotab id>:<version>"
+```
+
+`GetFeed` resends a record whenever it changes, with a newer version. Dismissing
+a fault writes `dismissDateTime` and `dismissUser`; an `count` that increments
+does the same. Both are resends of a record we have already delivered.
+
+If `event_id` were the Geotab id alone, every one of those revisions would hit
+`MarkSeen`, be recognized as already delivered, and vanish. Nobody downstream
+would ever learn that a critical fault was dismissed, because the only event
+saying so was deduplicated away.
+
+So every revision is its own event. The original id still survives, on every
+event, in two tags:
+
+| Tag | Value |
+| --- | --- |
+| `geotab.source_id` | the Geotab `id`, unchanged across revisions |
+| `geotab.version` | the `version` of this particular revision |
+
+A consumer that wants the latest state of one fault groups by
+`geotab.source_id` and takes the highest `geotab.version`.
+
+There is an open schema question behind this, about whether a normalized event
+should be able to say "this supersedes that" as a first-class field rather than
+by convention in tags. It is written up in [schema.md](schema.md) under open
+questions. The tags are what exists today; nothing in the code decides that
+question.
+
+### seed_from is required, and a missing one fails at load
+
+`GetFeed` called with no `fromVersion` returns no data at all. It returns only
+`toVersion`, the newest version in the system, so that the next call has
+somewhere to start. Backfill comes from a `fromDate` in the `search` object,
+which the API uses independently of `fromVersion` and only on the first request.
+
+A feed started with neither a cursor nor a seed date therefore reads nothing,
+forever. The cursor advances, no errors are raised, `/healthz` stays green, and
+no events arrive. The skip ceiling cannot catch it, because nothing is being
+skipped — there is nothing there at all.
+
+`seed_from` is required on every geotab adapter and a config without it does not
+load. It is either a duration back from the time of the poll, `720h`, or an
+absolute RFC3339 timestamp, `2026-01-01T00:00:00Z`. Wanting only new data is
+written `seed_from: 0s`, which is a statement of intent rather than an omission.
+
+It is used on the first request only, where it is sent as `search.fromDate` with
+no `fromVersion`. Once a cursor exists it is ignored entirely. The seeded poll
+logs at info with the date it used and how many events that produced, so the
+seed is visible in the log rather than inferred from an empty database.
+
+### The enrichment cache
+
+`FaultData` carries id references, not resolved objects, so `diagnostic`,
+`failureMode`, `controller` and `device` each need a separate `Get`. That is
+where the interesting fields come from:
+
+| Normalized field | Resolved from |
+| --- | --- |
+| `spn` | `diagnostic`, whose `code` is an SPN when its `diagnosticType` says so |
+| `fmi` | `failureMode`, whose `code` is the FMI |
+| `vin` | `device.vehicleIdentificationNumber` |
+| `unit_id` | `device.name` |
+| `geotab.controller` | `controller.name` |
+
+The `Get` budget is 500 calls a minute and `GetFeed` is 60, so the tight limit is
+the one enrichment spends. A page of 10,000 faults naively resolved would be
+40,000 `Get` calls against a 500/min budget, which is eight minutes of API
+allowance for one poll.
+
+Two things keep it in budget. Ids are cached, keyed by entity type and id, with a
+configurable refresh interval (`cache_refresh`, default 1h) and a bounded size,
+so a diagnostic or a device is fetched once and not again. What is left after the
+cache is batched: all the misses of one type go out in a single
+`ExecuteMultiCall`, which counts as one request rather than one per id. A fleet
+has a few hundred devices and a few hundred distinct diagnostics, so after the
+first poll the steady state is close to zero `Get` traffic.
+
+The cache sits behind a small `Resolver` interface so a future OEM adapter can
+reuse it. It has not been promoted to a shared package: one adapter is not a
+pattern.
+
+**A failed lookup never drops an event.** If a reference cannot be resolved, the
+event is emitted with the affected field absent and
+`geotab.unresolved` listing which references failed, as a comma separated list
+of FaultData property names such as `diagnostic,device`. Absent is a fact the
+schema can represent. A dropped fault is not.
+
+One consequence worth naming: `spn` is set only when the diagnostic's
+`diagnosticType` is `SuspectParameterNumber`. Geotab diagnostics also cover
+OBD-II and proprietary fault codes, whose `code` is a number from a different
+scheme. Putting one of those in `spn` would be a wrong answer, which is worse
+than a missing one, so those land in `geotab.diagnostic_code` and
+`geotab.diagnostic_type` instead. A `failureMode` code outside 0–31 is handled
+the same way, in `geotab.failure_mode_code`.
+
+### Severity
+
+Geotab's `severity` is already coalesced from five underlying properties in a
+documented precedence order, so this adapter maps that one field rather than
+inventing a second ranking from the lamps.
+
+| Geotab `severity` | fleetnorm `severity` |
+| --- | --- |
+| `Critical` | `critical` |
+| `Warning` | `medium` |
+| `None` | `info` |
+| `Unknown` | `medium` |
+| anything else | `medium`, plus `geotab.severity_raw` |
+
+An unrecognized value maps up rather than down: it is not evidence the fault is
+minor. The original string is kept in `geotab.severity_raw` so nothing about the
+guess is hidden, and `raw` still has the record as it arrived.
+
+### Field mapping
+
+| Normalized | From |
+| --- | --- |
+| `event_id` | `<id>:<version>` |
+| `occurred_at` | `dateTime`, converted to UTC |
+| `received_at` | the poll time |
+| `vin` | resolved device VIN, falling back to the device id |
+| `unit_id` | resolved device name |
+| `source` | the adapter's configured name |
+| `source_type` | `tsp` |
+| `spn` | resolved diagnostic code, when it is an SPN |
+| `fmi` | resolved failure mode code, when it is 0–31 |
+| `occurrence_count` | `count` |
+| `severity` | mapped from `severity`, see above |
+| `description` | `faultDescription`, when present |
+| `raw` | the FaultData JSON verbatim, before enrichment |
+
+A device with no VIN still gets a `vin`, because the field is required: the
+device id is used and `geotab.vin_fallback` is set to `device_id`, so nobody
+mistakes it for a real VIN.
+
+`lamp_status` is deliberately not set. Geotab reports five separate lamp
+properties and collapsing them into one string would pick a winner and lose the
+rest, so all five are tagged instead.
+
+### Tag keys
+
+Every tag this adapter writes, all under the `geotab.` prefix. A tag is absent
+when the source did not report the field; none of them is ever written as an
+empty string.
+
+| Tag | Meaning |
+| --- | --- |
+| `geotab.source_id` | the Geotab record id, stable across revisions |
+| `geotab.version` | the version of this revision |
+| `geotab.unresolved` | comma separated references that could not be resolved |
+| `geotab.severity_raw` | the original `severity` when it was unrecognized |
+| `geotab.vin_fallback` | `device_id` when `vin` holds a device id, not a VIN |
+| `geotab.amber_warning_lamp` | `amberWarningLamp` |
+| `geotab.red_stop_lamp` | `redStopLamp` |
+| `geotab.malfunction_lamp` | `malfunctionLamp` |
+| `geotab.protect_warning_lamp` | `protectWarningLamp` |
+| `geotab.fault_lamp_state` | `faultLampState` |
+| `geotab.controller` | resolved controller name |
+| `geotab.class_code` | `classCode` |
+| `geotab.fault_state` | `faultState` |
+| `geotab.source_address` | `sourceAddress` |
+| `geotab.dismiss_date_time` | `dismissDateTime`, in UTC |
+| `geotab.dismiss_user` | the dismissing user's id |
+| `geotab.diagnostic_code` | diagnostic code that is not an SPN |
+| `geotab.diagnostic_type` | the diagnostic type that code belongs to |
+| `geotab.failure_mode_code` | failure mode code outside the 0–31 FMI range |
+| `geotab.effect_on_component` | `effectOnComponent`, enriched faults only |
+| `geotab.recommendation` | `recommendation`, enriched faults only |
+| `geotab.risk_of_breakdown` | `riskOfBreakdown`, enriched faults only |
+
+`faultDescription`, `effectOnComponent`, `recommendation` and `riskOfBreakdown`
+exist only on enriched faults. Their absence is normal, never a validation
+failure, and never an empty tag.
+
+### Failures, cursor and rate limits
+
+Whole poll failures are rejected credentials, a refused connection, an
+undecodable response, and a `GetFeed` result with no `toVersion` — there is no
+cursor to advance to, so none is invented.
+
+Per record skips are FaultData records that fail validation after mapping, most
+often a record with no `id` or no `version`. The synthetic id is
+`<adapter-name>:<geotab-id>` when the id parsed and `<adapter-name>:index:<n>`
+when it did not.
+
+The cursor is the feed's `toVersion`, stored verbatim. It is Geotab's bookmark,
+not ours to interpret.
+
+Rate limits are respected with a client side limiter rather than discovered by
+being throttled: `GetFeed` is paced to 60 calls a minute and `Get` to 500.
+`poll_interval` is config driven with a documented minimum of one second, which
+is what the `GetFeed` limit allows.
+
+### Config
+
+```yaml
+adapters:
+  - type: geotab
+    name: fleet-geotab
+    server: my.geotab.com          # optional, default my.geotab.com
+    database: mydb
+    username_env: GEOTAB_USER
+    password_env: GEOTAB_PASS
+    seed_from: 720h                # required on a new feed
+    poll_interval: 30s
+    results_limit: 10000           # optional, max 50000
+    cache_refresh: 1h              # optional
+```
+
+Credentials follow the existing pattern: the config names environment variables,
+the values are resolved once at load so a missing one fails at startup rather
+than at the first poll, and they are held unexported and redacted in `String`
+and `GoString`. They are never logged.
