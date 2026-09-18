@@ -16,6 +16,7 @@ import (
 
 	"github.com/ianfrushon/fleetnorm/internal/adapter"
 	"github.com/ianfrushon/fleetnorm/internal/adapter/file"
+	"github.com/ianfrushon/fleetnorm/internal/adapter/geotab"
 	"github.com/ianfrushon/fleetnorm/internal/config"
 	"github.com/ianfrushon/fleetnorm/internal/output"
 	"github.com/ianfrushon/fleetnorm/internal/output/stdout"
@@ -125,6 +126,20 @@ func buildSources(cfg *config.Config, onSkip adapter.SkipFunc) ([]pipeline.Sourc
 			} else {
 				built, err = file.New(a.Name, a.Path)
 			}
+		case "geotab":
+			//always lenient: its input is a vendor feed we do not control, which
+			//is the case the default adapter contract exists for
+			built, err = geotab.New(geotab.Options{
+				Name:         a.Name,
+				Server:       a.Server,
+				Database:     a.Database,
+				Username:     a.Username(), //resolved and checked at config load
+				Password:     a.Password(),
+				SeedFrom:     a.SeedFrom.At, //config.Validate rejects a nil SeedFrom
+				ResultsLimit: a.ResultsLimit,
+				CacheRefresh: time.Duration(a.CacheRefresh),
+				OnSkip:       onSkip,
+			})
 		default:
 			//config.Validate rejects unknown types; this catches a new one
 			//added there without a constructor here
