@@ -1,5 +1,9 @@
 # fleetnorm
 
+**v0.1.0** — event schema `0.1.0`. The Geotab adapter is written and tested
+against canned responses, but has **not yet been run against a live MyGeotab
+database**. Treat it as untried against a real feed until it has been.
+
 A fleet that runs trucks from more than one manufacturer receives fault data in
 as many shapes as it has brands. International reports through OnCommand
 Connection, Detroit through Detroit Connect, PACCAR through SmartLinq, Cummins
@@ -142,9 +146,15 @@ deliberate trade. Blocking would mean one broken endpoint stops the whole
 pipeline.
 
 Every outcome lands in the audit log, including drops and the events no rule
-matched. The audit log is the evidence that the owner controlled where their
-data went, so it records the decisions fleetnorm made, not just the successful
-ones.
+matched. Each row names the rule that chose the destination, so the log answers
+where a fault went and why. The audit log is the evidence that the owner
+controlled where their data went, so it records the decisions fleetnorm made,
+not just the successful ones.
+
+Audit rows are kept for `store.audit_retention`, ninety days by default, and
+swept on the same tick as the dedupe set. `audit_retention: 0` keeps them
+forever, which is a supported choice rather than an oversight; the growth is then
+yours to watch. Sweeps that remove rows say so in the log at info.
 
 Requests carry an HMAC SHA256 signature over the exact request body in
 `X-Fleetnorm-Signature`, so a receiver can verify the events came from this
@@ -167,13 +177,30 @@ self contained apart from the config file and the SQLite database it creates.
 * [docs/schema.md](docs/schema.md), the event format and what every field means
 * [docs/policy.md](docs/policy.md), how routing rules are written and evaluated
 * [docs/adapters.md](docs/adapters.md), how to write a new adapter
+* [CHANGELOG.md](CHANGELOG.md), what changed in each release
 
 ## Status
 
-Milestone one. The file adapter, the stdout and webhook outputs, the router, the
-store and the schema are complete and tested. Adapters for the OEM and telematics
-APIs are the next thing and are additive: they implement the same interface the
-file adapter does.
+v0.1.0, emitting events at schema version `0.1.0`. The two are versioned
+separately: the schema promise in [docs/schema.md](docs/schema.md) is about the
+event format, not about this binary.
+
+Milestone one is complete and tested: the file adapter, the stdout and webhook
+outputs, the router, the store and the schema. Milestone two adds the Geotab
+adapter, which is complete and tested against canned MyGeotab responses and has
+not yet run against a live database.
+
+Further OEM and telematics adapters are additive: they implement the same
+interface the file adapter does.
+
+Known limitations at this version:
+
+* No schema migrations. The store creates its tables with `IF NOT EXISTS` and
+  has no versioned migration path, so the first non-additive change needs one, or
+  a documented export and reimport.
+* Events are marked seen before delivery, so a crash in between loses the event
+  rather than duplicating it. Fixing that needs a durable queue.
+* Delivery is at least once, never exactly once.
 
 ## License
 
