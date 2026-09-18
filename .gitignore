@@ -1,0 +1,5 @@
+dist/
+fleetnorm
+*.db
+*.db-shm
+*.db-wal
