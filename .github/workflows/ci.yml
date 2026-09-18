@@ -1,0 +1,28 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # gofmt, vet and test -race
+      - run: make check
+
+      # the release artifacts are three cross compiled binaries; a build that
+      # only works on the host is not the thing we ship
+      - run: make build
+
+      - name: every platform binary was produced
+        run: |
+          set -e
+          for f in dist/fleetnorm-linux-amd64 dist/fleetnorm-darwin-arm64 dist/fleetnorm-windows-amd64.exe; do
+            test -s "$f" || { echo "missing or empty: $f"; exit 1; }
+            echo "ok: $f"
+          done
