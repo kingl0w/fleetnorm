@@ -1,0 +1,55 @@
+[
+  {
+    "event_id": "replay-000001",
+    "vin": "1XKYDP9X1MJ123456",
+    "unit_id": "T-1102",
+    "occurred_at": "2026-09-14T13:04:05Z",
+    "severity": "low",
+    "spn": 110,
+    "fmi": 16,
+    "lamp_status": "amber",
+    "odometer_km": 288401.0,
+    "description": "Engine coolant temperature high, moderately severe"
+  },
+  {
+    "event_id": "replay-000002",
+    "vin": "3AKJHHDR8LSLT1234",
+    "unit_id": "T-1187",
+    "occurred_at": "2026-09-14T08:40:00-05:00",
+    "severity": "critical",
+    "spn": 3226,
+    "fmi": 20,
+    "occurrence_count": 4,
+    "lamp_status": "red",
+    "odometer_km": 412883.5,
+    "location": { "lat": 41.8781, "lon": -87.6298 },
+    "description": "Aftertreatment 1 SCR intake NOx sensor: data drifted high",
+    "derate_pending": true,
+    "terminal": "chicago-yard"
+  },
+  {
+    "event_id": "replay-000003",
+    "vin": "1FUJGLDR8CLBP1234",
+    "unit_id": "T-0940",
+    "occurred_at": "2026-09-14T14:22:41Z",
+    "severity": "high",
+    "spn": 3216,
+    "fmi": 4,
+    "occurrence_count": 1,
+    "lamp_status": "amber",
+    "description": "Aftertreatment 1 intake NOx sensor circuit voltage low",
+    "raw": {
+      "code": "SPN3216/FMI4",
+      "reported_by": "gateway-7",
+      "severity_hint": "WARN"
+    }
+  },
+  {
+    "event_id": "replay-000004",
+    "vin": "1XKYDP9X1MJ123456",
+    "unit_id": "T-1102",
+    "occurred_at": "2026-09-14T15:00:00Z",
+    "severity": "info",
+    "description": "Scheduled health report, no active faults"
+  }
+]

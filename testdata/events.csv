@@ -1,0 +1,4 @@
+event_id,vin,unit_id,occurred_at,severity,spn,fmi,occurrence_count,lamp_status,odometer_km,lat,lon,description,terminal
+replay-csv-1,1XKYDP9X1MJ123456,T-1102,2026-09-14T13:04:05Z,low,110,16,1,amber,288401,,,Engine coolant temperature high,chicago-yard
+replay-csv-2,3AKJHHDR8LSLT1234,T-1187,2026-09-14T13:40:00Z,critical,3226,20,4,red,412883.5,41.8781,-87.6298,Aftertreatment 1 SCR intake NOx sensor drifted high,chicago-yard
+replay-csv-3,1FUJGLDR8CLBP1234,T-0940,2026-09-14T14:22:41Z,high,3216,4,1,amber,,,,Aftertreatment 1 intake NOx sensor circuit voltage low,
