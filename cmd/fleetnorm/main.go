@@ -82,6 +82,7 @@ func run(configPath, logLevel string) error {
 		Sources:         sources,
 		Destinations:    destinations,
 		DedupeRetention: time.Duration(cfg.Store.DedupeRetention),
+		AuditRetention:  time.Duration(*cfg.Store.AuditRetention), //defaulted at load
 	})
 	if err != nil {
 		return err

@@ -590,3 +590,137 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("timed out waiting for condition")
 }
+
+// the audit log records which rule sent an event to an output, which is the
+// first question anyone asks once there are more rules than fit on a screen.
+func TestAuditRecordsTheRule(t *testing.T) {
+	shop, console := newFakeOutput("my-shop"), newFakeOutput("console")
+	a := &fakeAdapter{name: "replay", batches: [][]event.Event{{testEvent("e1")}}}
+
+	rules := []config.Rule{
+		{Name: "urgent", Match: config.Match{Severity: []string{"high"}}, Route: []string{"my-shop"}},
+		{Route: []string{"console"}}, //unnamed: positional label
+	}
+	h := newHarness(t, rules, source(a),
+		[]Destination{destination(shop, 16, 3), destination(console, 16, 3)})
+	h.run(map[*fakeOutput]int{shop: 1, console: 1})
+
+	want := map[string]string{"my-shop": "urgent", "console": "rule[1]"}
+	recs := h.auditFor("e1")
+	if len(recs) != 2 {
+		t.Fatalf("audit for e1 = %+v, want two rows", recs)
+	}
+	for _, r := range recs {
+		if got := r.Rule; got != want[r.Output] {
+			t.Errorf("audit row for %s has rule %q, want %q", r.Output, got, want[r.Output])
+		}
+	}
+}
+
+// an event nothing matched has no rule to name
+func TestUnroutedAuditHasNoRule(t *testing.T) {
+	console := newFakeOutput("console")
+	a := &fakeAdapter{name: "replay", batches: [][]event.Event{{testEvent("e1")}}}
+
+	//a rule that cannot match the test event
+	rules := []config.Rule{{Name: "never", Match: config.Match{VIN: "nope"}, Route: []string{"console"}}}
+	h := newHarness(t, rules, source(a), []Destination{destination(console, 16, 3)})
+	h.run(nil)
+
+	recs := h.auditFor("e1")
+	if len(recs) != 1 {
+		t.Fatalf("audit for e1 = %+v, want one row", recs)
+	}
+	if recs[0].Rule != "" {
+		t.Errorf("unrouted audit row has rule %q, want empty", recs[0].Rule)
+	}
+	if recs[0].Status != store.StatusDropped || recs[0].Error != "no matching rule" {
+		t.Errorf("unrouted audit = %+v", recs[0])
+	}
+}
+
+// a record the adapter could not use never reached a rule either
+func TestSkipAuditHasNoRule(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "fleetnorm.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+
+	SkipAuditor(st, NewMetrics())(context.Background(), adapter.Skipped{
+		Adapter: "replay", ID: "replay:line:7", Reason: "vin is required",
+	})
+	recs, err := st.AuditFor(context.Background(), "replay:line:7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("audit = %+v, want one row", recs)
+	}
+	if recs[0].Rule != "" || recs[0].Output != "" {
+		t.Errorf("skip audit = %+v, want no rule and no output", recs[0])
+	}
+}
+
+// the audit sweep runs on the same tick as the dedupe sweep. zero retention
+// means never, which is what a permanent record looks like.
+func TestAuditSweep(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		retention time.Duration
+		wantKept  bool
+	}{
+		{name: "old rows are swept", retention: time.Hour},
+		{name: "zero keeps everything", retention: 0, wantKept: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, err := store.Open(filepath.Join(t.TempDir(), "fleetnorm.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer st.Close()
+
+			//a row well outside any retention window
+			if err := st.Audit(context.Background(), store.Record{
+				EventID: "ancient", Output: "console", Rule: "rule[0]",
+				Status: store.StatusDelivered, Attempts: 1,
+				RoutedAt: time.Now().UTC().Add(-365 * 24 * time.Hour),
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			out := newFakeOutput("console")
+			a := &fakeAdapter{name: "replay", batches: [][]event.Event{{testEvent("e1")}}}
+			p, err := New(Options{
+				Store: st, Router: router.New(catchAll("console")), Metrics: NewMetrics(),
+				Sources: source(a), Destinations: []Destination{destination(out, 16, 1)},
+				DedupeRetention: time.Hour,
+				AuditRetention:  tc.retention,
+				DrainTimeout:    time.Second,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			//the sweep runs once as the loop starts, before the first tick
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- p.Run(ctx) }()
+			time.Sleep(50 * time.Millisecond)
+			cancel()
+			<-done
+
+			got := mustAudit(t, st, "ancient")
+			if tc.wantKept && len(got) != 1 {
+				t.Errorf("audit row was swept with retention 0: %+v", got)
+			}
+			if !tc.wantKept && len(got) != 0 {
+				t.Errorf("audit row survived the sweep: %+v", got)
+			}
+			//the fresh row is never swept either way
+			if recs := mustAudit(t, st, "e1"); len(recs) == 0 {
+				t.Error("the current event's audit row went missing")
+			}
+		})
+	}
+}

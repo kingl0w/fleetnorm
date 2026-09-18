@@ -45,9 +45,12 @@ func TestLoadExample(t *testing.T) {
 	}
 
 	want := []Rule{
-		{Match: Match{Severity: []string{"critical", "high"}}, Route: []string{"my-shop", "console"}},
-		{Match: Match{Source: "replay", SPN: SPNSet{{3226, 3226}, {3216, 3216}, {4000, 4100}}}, Route: []string{"my-shop"}},
-		{Route: []string{"console"}},
+		{Name: "urgent-to-shop", Label: "urgent-to-shop",
+			Match: Match{Severity: []string{"critical", "high"}}, Route: []string{"my-shop", "console"}},
+		{Name: "aftertreatment-watchlist", Label: "aftertreatment-watchlist",
+			Match: Match{Source: "replay", SPN: SPNSet{{3226, 3226}, {3216, 3216}, {4000, 4100}}}, Route: []string{"my-shop"}},
+		{Name: "everything-to-console", Label: "everything-to-console",
+			Match: Match{}, Route: []string{"console"}},
 	}
 	if !reflect.DeepEqual(c.Rules, want) {
 		t.Errorf("rules =\n%+v\nwant\n%+v", c.Rules, want)
@@ -564,5 +567,77 @@ func TestAdapterCredentialsAreNotPrintable(t *testing.T) {
 		if !strings.Contains(out, "[REDACTED]") {
 			t.Errorf("%s = %s, want the credentials shown as redacted", format, out)
 		}
+	}
+}
+
+func TestRuleLabels(t *testing.T) {
+	src := strings.Replace(valid, `rules:
+  - { match: {}, route: [console] }`, `rules:
+  - { name: urgent, match: { severity: [critical] }, route: [console] }
+  - { match: {}, route: [console] }
+  - { name: urgent, match: { severity: [low] }, route: [console] }`, 1)
+	c, err := parse(strings.NewReader(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	//a name when there is one, the position when there is not, and no
+	//uniqueness requirement: two rules may describe the same concern
+	want := []string{"urgent", "rule[1]", "urgent"}
+	for i, w := range want {
+		if got := c.Rules[i].Label; got != w {
+			t.Errorf("rules[%d].Label = %q, want %q", i, got, w)
+		}
+	}
+}
+
+func TestAuditRetention(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want time.Duration
+		bad  string
+	}{
+		{name: "absent gets the default", yaml: valid, want: DefaultAuditRetention},
+		{
+			//zero is a choice, not an omission: keep the evidence forever
+			name: "zero means never sweep",
+			yaml: valid + "\nstore: { audit_retention: 0s }\n",
+			want: 0,
+		},
+		{
+			name: "an explicit value is kept",
+			yaml: valid + "\nstore: { audit_retention: 24h }\n",
+			want: 24 * time.Hour,
+		},
+		{
+			//a store block with no audit_retention still gets the default
+			name: "another store key present",
+			yaml: valid + "\nstore: { path: ./x.db }\n",
+			want: DefaultAuditRetention,
+		},
+		{
+			name: "negative is an error",
+			yaml: valid + "\nstore: { audit_retention: -1h }\n",
+			bad:  "must not be negative",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, err := parse(strings.NewReader(tc.yaml))
+			if tc.bad != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.bad) {
+					t.Fatalf("err = %v, want it to mention %q", err, tc.bad)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Store.AuditRetention == nil {
+				t.Fatal("audit_retention was left nil; absent must get the default")
+			}
+			if got := time.Duration(*c.Store.AuditRetention); got != tc.want {
+				t.Errorf("audit_retention = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

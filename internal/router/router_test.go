@@ -206,7 +206,9 @@ func TestRoute(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := New(tt.rules).Route(base())
+			//this table is about which outputs are chosen and in what order;
+			//TestRouteLabels covers which rule gets the credit
+			got := outputs(New(tt.rules).Route(base()))
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Route() = %v, want %v", got, tt.want)
 			}
@@ -224,14 +226,14 @@ func TestRouteIsStable(t *testing.T) {
 	r := New(rules)
 	want := []string{"my-shop", "console"}
 
-	if got := r.Route(base()); !reflect.DeepEqual(got, want) {
+	if got := outputs(r.Route(base())); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Route() = %v, want %v", got, want)
 	}
 	rules = append(rules, config.Rule{Route: []string{"surprise"}})
-	if got := r.Route(base()); !reflect.DeepEqual(got, want) {
+	if got := outputs(r.Route(base())); !reflect.DeepEqual(got, want) {
 		t.Errorf("Route() = %v after the caller appended a rule, want %v", got, want)
 	}
-	if got := r.Route(base()); !reflect.DeepEqual(got, want) {
+	if got := outputs(r.Route(base())); !reflect.DeepEqual(got, want) {
 		t.Errorf("Route() = %v on a second call, want %v", got, want)
 	}
 }
@@ -265,8 +267,92 @@ func TestExampleConfigRoutesShippedEvents(t *testing.T) {
 
 	r := New(c.Rules)
 	for _, e := range events {
-		if got := r.Route(e); !reflect.DeepEqual(got, want[e.EventID]) {
+		if got := outputs(r.Route(e)); !reflect.DeepEqual(got, want[e.EventID]) {
 			t.Errorf("Route(%s) = %v, want %v", e.EventID, got, want[e.EventID])
 		}
+	}
+
+	//the shipped rules are named, and those names are what the audit log shows
+	byID := map[string][]Target{}
+	for _, e := range events {
+		byID[e.EventID] = r.Route(e)
+	}
+	wantRules := map[string][]string{
+		"replay-000001": {"everything-to-console"},
+		//critical: the first rule wins both outputs even though the second and
+		//third also match, because the event is delivered once per output
+		"replay-000002": {"urgent-to-shop", "urgent-to-shop"},
+		"replay-000003": {"urgent-to-shop", "urgent-to-shop"},
+		"replay-000004": {"everything-to-console"},
+	}
+	for id, targets := range byID {
+		var got []string
+		for _, t := range targets {
+			got = append(got, t.Rule)
+		}
+		if !reflect.DeepEqual(got, wantRules[id]) {
+			t.Errorf("rules for %s = %v, want %v", id, got, wantRules[id])
+		}
+	}
+}
+
+// outputs drops the rule labels, for the tests that are about destinations.
+func outputs(targets []Target) []string {
+	var out []string
+	for _, t := range targets {
+		out = append(out, t.Output)
+	}
+	return out
+}
+
+func TestRouteLabels(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		rules []config.Rule
+		want  []Target
+	}{
+		{
+			name:  "a named rule is credited by name",
+			rules: []config.Rule{{Name: "urgent", Match: config.Match{Severity: []string{"high"}}, Route: []string{"my-shop"}}},
+			want:  []Target{{Output: "my-shop", Rule: "urgent"}},
+		},
+		{
+			name:  "an unnamed rule falls back to its position",
+			rules: []config.Rule{{Route: []string{"console"}}},
+			want:  []Target{{Output: "console", Rule: "rule[0]"}},
+		},
+		{
+			name: "the position is the rule's own, not the match count",
+			rules: []config.Rule{
+				{Match: config.Match{Severity: []string{"info"}}, Route: []string{"never"}},
+				{Route: []string{"console"}},
+			},
+			want: []Target{{Output: "console", Rule: "rule[1]"}},
+		},
+		{
+			//the destination dedupe stays: one delivery, credited to whichever
+			//rule put it in the queue
+			name: "a shared output keeps the first matching rule",
+			rules: []config.Rule{
+				{Name: "first", Match: config.Match{Severity: []string{"high"}}, Route: []string{"my-shop"}},
+				{Name: "second", Route: []string{"my-shop"}},
+			},
+			want: []Target{{Output: "my-shop", Rule: "first"}},
+		},
+		{
+			//labels are free-form and need not be unique
+			name: "two rules may share a label",
+			rules: []config.Rule{
+				{Name: "shop", Match: config.Match{Severity: []string{"high"}}, Route: []string{"my-shop"}},
+				{Name: "shop", Route: []string{"console"}},
+			},
+			want: []Target{{Output: "my-shop", Rule: "shop"}, {Output: "console", Rule: "shop"}},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := New(tt.rules).Route(base()); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Route() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }

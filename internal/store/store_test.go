@@ -155,13 +155,14 @@ func TestAudit(t *testing.T) {
 	s.at(now)
 
 	want := []Record{
-		{EventID: "e1", VIN: "1XK", Output: "console", Status: StatusDelivered, Attempts: 1, RoutedAt: now},
-		{EventID: "e1", VIN: "1XK", Output: "my-shop", Status: StatusFailed, Attempts: 5, RoutedAt: now, Error: "502 Bad Gateway"},
+		{EventID: "e1", VIN: "1XK", Output: "console", Rule: "everything", Status: StatusDelivered, Attempts: 1, RoutedAt: now},
+		{EventID: "e1", VIN: "1XK", Output: "my-shop", Rule: "urgent", Status: StatusFailed, Attempts: 5, RoutedAt: now, Error: "502 Bad Gateway"},
+		//no rule: a record skipped before routing never had one
 		{EventID: "e1", VIN: "1XK", Output: "my-shop", Status: StatusDropped, Attempts: 0, RoutedAt: now, Error: "buffer full"},
 	}
 	for _, r := range want {
 		if err := s.Audit(ctx, Record{
-			EventID: r.EventID, VIN: r.VIN, Output: r.Output,
+			EventID: r.EventID, VIN: r.VIN, Output: r.Output, Rule: r.Rule,
 			Status: r.Status, Attempts: r.Attempts, Error: r.Error,
 		}); err != nil { //RoutedAt left zero: it must default to the clock
 			t.Fatal(err)
@@ -242,5 +243,58 @@ func TestConcurrentWrites(t *testing.T) {
 	}
 	if n != writers*each {
 		t.Errorf("audit rows = %d, want %d", n, writers*each)
+	}
+}
+
+func TestSweepAudit(t *testing.T) {
+	ctx := t.Context()
+	s := newStore(t)
+	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
+
+	s.at(now.Add(-48 * time.Hour))
+	if err := s.Audit(ctx, Record{EventID: "old", Output: "console", Rule: "r", Status: StatusDelivered, Attempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	s.at(now.Add(-1 * time.Hour))
+	if err := s.Audit(ctx, Record{EventID: "recent", Output: "console", Rule: "r", Status: StatusDelivered, Attempts: 1}); err != nil {
+		t.Fatal(err)
+	}
+	s.at(now)
+
+	n, err := s.SweepAudit(ctx, now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("SweepAudit removed %d, want 1", n)
+	}
+	if got, _ := s.AuditFor(ctx, "old"); got != nil {
+		t.Errorf("swept row is still there: %+v", got)
+	}
+	if got, _ := s.AuditFor(ctx, "recent"); len(got) != 1 {
+		t.Errorf("in-window row = %+v, want it kept", got)
+	}
+	//sweeping again removes nothing
+	if n, err := s.SweepAudit(ctx, now.Add(-24*time.Hour)); err != nil || n != 0 {
+		t.Errorf("second sweep removed %d, %v; want 0, nil", n, err)
+	}
+}
+
+// the rule label survives the round trip, and an empty one is not an error
+func TestAuditRuleRoundTrip(t *testing.T) {
+	ctx := t.Context()
+	s := newStore(t)
+	for _, rule := range []string{"named-rule", "rule[3]", ""} {
+		id := "e-" + rule
+		if err := s.Audit(ctx, Record{EventID: id, Output: "console", Rule: rule, Status: StatusDelivered, Attempts: 1}); err != nil {
+			t.Fatal(err)
+		}
+		got, err := s.AuditFor(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Rule != rule {
+			t.Errorf("Rule = %+v, want %q", got, rule)
+		}
 	}
 }

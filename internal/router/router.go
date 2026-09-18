@@ -10,30 +10,50 @@ import (
 	"github.com/ianfrushon/fleetnorm/internal/event"
 )
 
+// Target is one output an event goes to, and the label of the rule that sent it
+// there. the label is what the audit log records, so "why did this fault reach
+// that party" is answerable without re-deriving the match.
+type Target struct {
+	Output string
+	Rule   string
+}
+
 type Router struct {
 	rules []config.Rule
 }
 
-// New takes rules config.Load has already validated.
+// New takes rules config.Load has already validated. a rule with no label gets
+// its positional one here too, so a Router built directly, as tests do, still
+// names every rule.
 func New(rules []config.Rule) *Router {
-	return &Router{rules: slices.Clone(rules)}
+	cloned := slices.Clone(rules)
+	for i := range cloned {
+		if cloned[i].Label == "" {
+			cloned[i].Label = config.RuleLabel(cloned[i].Name, i)
+		}
+	}
+	return &Router{rules: cloned}
 }
 
 // Route returns the outputs for an event, deduplicated, in the order first
 // chosen. nil means no rule matched, which the caller audits as a drop.
-func (r *Router) Route(e event.Event) []string {
-	var dests []string
+//
+// where two rules route to the same output the event is still delivered once,
+// and the target keeps the first matching rule's label: that is the rule that
+// put the event in the queue.
+func (r *Router) Route(e event.Event) []Target {
+	var targets []Target
 	for _, rule := range r.rules {
 		if !matches(rule.Match, e) {
 			continue
 		}
 		for _, name := range rule.Route {
-			if !slices.Contains(dests, name) {
-				dests = append(dests, name)
+			if !slices.ContainsFunc(targets, func(t Target) bool { return t.Output == name }) {
+				targets = append(targets, Target{Output: name, Rule: rule.Label})
 			}
 		}
 	}
-	return dests
+	return targets
 }
 
 // conditions are ANDed, lists within one are ORed, comparisons are exact.

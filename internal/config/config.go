@@ -26,8 +26,12 @@ const (
 	DefaultBuffer          = 256
 	DefaultStorePath       = "./fleetnorm.db"
 	DefaultDedupeRetention = 7 * 24 * time.Hour
-	DefaultServerAddr      = ":8080"
-	BackoffExponential     = "exponential"
+
+	//the audit log is evidence of where the owner's data went, so it is kept
+	//far longer than the dedupe set and trimmed reluctantly
+	DefaultAuditRetention = 90 * 24 * time.Hour
+	DefaultServerAddr     = ":8080"
+	BackoffExponential    = "exponential"
 
 	DefaultGeotabServer       = "my.geotab.com"
 	DefaultGeotabResultsLimit = 10000
@@ -135,8 +139,23 @@ type Retry struct {
 }
 
 type Rule struct {
+	Name  string   `yaml:"name"`
 	Match Match    `yaml:"match"`
 	Route []string `yaml:"route"`
+
+	//Name, or a positional fallback when there is none. resolved at load so the
+	//audit log never records a blank. not read from yaml.
+	Label string `yaml:"-"`
+}
+
+// RuleLabel is what the audit log records for a rule: its name, or its position
+// when it has none. labels are not required to be unique, since two rules may
+// reasonably describe the same concern.
+func RuleLabel(name string, index int) string {
+	if name != "" {
+		return name
+	}
+	return fmt.Sprintf("rule[%d]", index)
 }
 
 // Match is a set of conditions ANDed together. a zero Match matches everything.
@@ -154,6 +173,11 @@ type Match struct {
 type Store struct {
 	Path            string   `yaml:"path"`
 	DedupeRetention Duration `yaml:"dedupe_retention"`
+
+	//how long audit rows are kept. a pointer because zero is a meaningful
+	//value here and absent is not: 0 means never sweep, which is what someone
+	//wanting a permanent record sets, while absent gets DefaultAuditRetention.
+	AuditRetention *Duration `yaml:"audit_retention"`
 }
 
 type Server struct {
@@ -233,11 +257,19 @@ func (c *Config) applyDefaults() {
 			o.Retry.Backoff = BackoffExponential
 		}
 	}
+	for i := range c.Rules {
+		c.Rules[i].Label = RuleLabel(c.Rules[i].Name, i)
+	}
 	if c.Store.Path == "" {
 		c.Store.Path = DefaultStorePath
 	}
 	if c.Store.DedupeRetention == 0 {
 		c.Store.DedupeRetention = Duration(DefaultDedupeRetention)
+	}
+	//only when absent: an explicit 0 means never sweep and must survive
+	if c.Store.AuditRetention == nil {
+		d := Duration(DefaultAuditRetention)
+		c.Store.AuditRetention = &d
 	}
 	if c.Server.Addr == "" {
 		c.Server.Addr = DefaultServerAddr
@@ -385,6 +417,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Store.DedupeRetention <= 0 {
 		bad("store.dedupe_retention must be positive")
+	}
+	if c.Store.AuditRetention != nil && *c.Store.AuditRetention < 0 {
+		bad("store.audit_retention must not be negative; 0 means never sweep")
 	}
 	if c.Server.Addr == "" {
 		bad("server.addr is required")

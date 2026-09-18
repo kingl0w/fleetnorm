@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS audit (
 	event_id  TEXT NOT NULL,
 	vin       TEXT NOT NULL,
 	output    TEXT NOT NULL,
+	rule      TEXT NOT NULL DEFAULT '',
 	status    TEXT NOT NULL,
 	attempts  INTEGER NOT NULL,
 	routed_at TEXT NOT NULL,
@@ -134,11 +135,24 @@ func (s *Store) SweepSeen(ctx context.Context, cutoff time.Time) (int64, error) 
 	return res.RowsAffected()
 }
 
+// SweepAudit removes audit rows routed before cutoff. the caller passes a
+// cutoff rather than a duration so a test can control the clock, and so that a
+// retention of zero never reaches here at all: never sweeping is a choice the
+// pipeline makes, not one this encodes.
+func (s *Store) SweepAudit(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM audit WHERE routed_at < ?`, cutoff.UTC().Format(tsFormat))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // Record is one routing decision: what happened to one event at one output.
 type Record struct {
 	EventID  string
 	VIN      string
 	Output   string //"" when the event was never routed anywhere
+	Rule     string //label of the rule that chose Output; "" when no rule was involved
 	Status   Status
 	Attempts int
 	RoutedAt time.Time //defaults to now
@@ -151,9 +165,9 @@ func (s *Store) Audit(ctx context.Context, r Record) error {
 		r.RoutedAt = s.now()
 	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO audit (event_id, vin, output, status, attempts, routed_at, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		r.EventID, r.VIN, r.Output, string(r.Status), r.Attempts,
+		INSERT INTO audit (event_id, vin, output, rule, status, attempts, routed_at, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.EventID, r.VIN, r.Output, r.Rule, string(r.Status), r.Attempts,
 		r.RoutedAt.UTC().Format(tsFormat), r.Error)
 	return err
 }
@@ -161,7 +175,7 @@ func (s *Store) Audit(ctx context.Context, r Record) error {
 // AuditFor returns every recorded decision for an event, oldest first.
 func (s *Store) AuditFor(ctx context.Context, eventID string) ([]Record, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT event_id, vin, output, status, attempts, routed_at, error
+		SELECT event_id, vin, output, rule, status, attempts, routed_at, error
 		FROM audit WHERE event_id = ? ORDER BY id`, eventID)
 	if err != nil {
 		return nil, err
@@ -172,7 +186,7 @@ func (s *Store) AuditFor(ctx context.Context, eventID string) ([]Record, error) 
 	for rows.Next() {
 		var r Record
 		var routedAt string
-		if err := rows.Scan(&r.EventID, &r.VIN, &r.Output, &r.Status, &r.Attempts, &routedAt, &r.Error); err != nil {
+		if err := rows.Scan(&r.EventID, &r.VIN, &r.Output, &r.Rule, &r.Status, &r.Attempts, &routedAt, &r.Error); err != nil {
 			return nil, err
 		}
 		if r.RoutedAt, err = time.Parse(tsFormat, routedAt); err != nil {

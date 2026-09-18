@@ -55,7 +55,12 @@ type Options struct {
 	Sources         []Source
 	Destinations    []Destination
 	DedupeRetention time.Duration
-	DrainTimeout    time.Duration //how long shutdown waits for queues to empty
+
+	//how long audit rows are kept. zero means never sweep, which is what a
+	//permanent record looks like.
+	AuditRetention time.Duration
+
+	DrainTimeout time.Duration //how long shutdown waits for queues to empty
 }
 
 type Pipeline struct {
@@ -67,7 +72,14 @@ type dest struct {
 	name        string
 	out         output.Output
 	maxAttempts int
-	ch          chan event.Event
+	ch          chan queued
+}
+
+// queued is an event on its way to one output, carrying the label of the rule
+// that sent it there so the audit row written at delivery time can name it.
+type queued struct {
+	event event.Event
+	rule  string
 }
 
 func New(o Options) (*Pipeline, error) {
@@ -97,7 +109,7 @@ func New(o Options) (*Pipeline, error) {
 		if d.Buffer <= 0 || d.MaxAttempts <= 0 {
 			return nil, fmt.Errorf("destination %q: buffer and max_attempts must be positive", name)
 		}
-		queue := make(chan event.Event, d.Buffer)
+		queue := make(chan queued, d.Buffer)
 		p.dests[name] = &dest{name: name, out: d.Output, maxAttempts: d.MaxAttempts, ch: queue}
 		o.Metrics.gauge(MetricQueueDepth, labels("output", name), func() int { return len(queue) })
 		o.Metrics.gauge(MetricQueueCap, labels("output", name), func() int { return cap(queue) })
@@ -227,62 +239,64 @@ func (p *Pipeline) dispatch(ctx context.Context, adapterName string, e event.Eve
 		return
 	}
 
-	dests := p.opts.Router.Route(e)
-	if len(dests) == 0 {
+	targets := p.opts.Router.Route(e)
+	if len(targets) == 0 {
 		p.opts.Metrics.inc(MetricUnrouted, "")
-		p.audit(ctx, e, "", store.StatusDropped, 0, "no matching rule")
+		//no rule matched, so there is no rule label to record
+		p.audit(ctx, e, "", "", store.StatusDropped, 0, "no matching rule")
 		return
 	}
-	for _, name := range dests {
-		d := p.dests[name]
+	for _, t := range targets {
+		d := p.dests[t.Output]
 		if d == nil { //config validation should have caught this
-			p.audit(ctx, e, name, store.StatusDropped, 0, "no such output")
+			p.audit(ctx, e, t.Output, t.Rule, store.StatusDropped, 0, "no such output")
 			continue
 		}
 		select {
-		case d.ch <- e:
+		case d.ch <- queued{event: e, rule: t.Rule}:
 		//dropping beats blocking the poller behind one slow endpoint
 		default:
-			p.opts.Metrics.inc(MetricDeliveries, labels("output", name, "status", string(store.StatusDropped)))
-			p.audit(ctx, e, name, store.StatusDropped, 0, "output queue full")
-			slog.Warn("output queue full, event dropped", "output", name, "event_id", e.EventID)
+			p.opts.Metrics.inc(MetricDeliveries, labels("output", t.Output, "status", string(store.StatusDropped)))
+			p.audit(ctx, e, t.Output, t.Rule, store.StatusDropped, 0, "output queue full")
+			slog.Warn("output queue full, event dropped", "output", t.Output, "event_id", e.EventID, "rule", t.Rule)
 		}
 	}
 }
 
 func (p *Pipeline) work(ctx context.Context, d *dest) {
-	for e := range d.ch {
+	for q := range d.ch {
 		//shutting down: keep reading so everything queued is accounted for,
 		//but stop attempting deliveries
 		if ctx.Err() != nil {
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusDropped)))
-			p.audit(ctx, e, d.name, store.StatusDropped, 0, "shut down before delivery")
+			p.audit(ctx, q.event, d.name, q.rule, store.StatusDropped, 0, "shut down before delivery")
 			continue
 		}
-		p.deliver(ctx, d, e)
+		p.deliver(ctx, d, q)
 	}
 }
 
-func (p *Pipeline) deliver(ctx context.Context, d *dest, e event.Event) {
+func (p *Pipeline) deliver(ctx context.Context, d *dest, q queued) {
+	e := q.event
 	var err error
 	for attempt := 1; attempt <= d.maxAttempts; attempt++ {
 		err = d.out.Send(ctx, e)
 		switch {
 		case err == nil:
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusDelivered)))
-			p.audit(ctx, e, d.name, store.StatusDelivered, attempt, "")
+			p.audit(ctx, e, d.name, q.rule, store.StatusDelivered, attempt, "")
 			return
 
 		//five identical rejections help nobody
 		case errors.Is(err, output.ErrPermanent):
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusFailed)))
-			p.audit(ctx, e, d.name, store.StatusFailed, attempt, err.Error())
+			p.audit(ctx, e, d.name, q.rule, store.StatusFailed, attempt, err.Error())
 			slog.Error("permanent delivery failure", "output", d.name, "event_id", e.EventID, "error", err)
 			return
 
 		case ctx.Err() != nil:
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusDropped)))
-			p.audit(ctx, e, d.name, store.StatusDropped, attempt, "shut down mid-delivery: "+err.Error())
+			p.audit(ctx, e, d.name, q.rule, store.StatusDropped, attempt, "shut down mid-delivery: "+err.Error())
 			return
 		}
 
@@ -293,13 +307,13 @@ func (p *Pipeline) deliver(ctx context.Context, d *dest, e event.Event) {
 		}
 		if !sleep(ctx, backoff(attempt, err)) {
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusDropped)))
-			p.audit(ctx, e, d.name, store.StatusDropped, attempt, "shut down between attempts: "+err.Error())
+			p.audit(ctx, e, d.name, q.rule, store.StatusDropped, attempt, "shut down between attempts: "+err.Error())
 			return
 		}
 	}
 
 	p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusFailed)))
-	p.audit(ctx, e, d.name, store.StatusFailed, d.maxAttempts, err.Error())
+	p.audit(ctx, e, d.name, q.rule, store.StatusFailed, d.maxAttempts, err.Error())
 	slog.Error("giving up on delivery", "output", d.name, "event_id", e.EventID,
 		"attempts", d.maxAttempts, "error", err)
 }
@@ -331,13 +345,30 @@ func (p *Pipeline) sweep(ctx context.Context) {
 	tick := time.NewTicker(sweepInterval)
 	defer tick.Stop()
 	for {
-		cutoff := time.Now().UTC().Add(-p.opts.DedupeRetention)
+		now := time.Now().UTC()
+		cutoff := now.Add(-p.opts.DedupeRetention)
 		n, err := p.opts.Store.SweepSeen(ctx, cutoff)
 		if err != nil && ctx.Err() == nil {
 			slog.Error("dedupe sweep failed", "error", err)
 		}
 		if n > 0 {
 			slog.Info("swept expired dedupe entries", "removed", n, "older_than", cutoff)
+		}
+
+		//zero means keep everything: a permanent record is a legitimate choice,
+		//so it is spelled as a retention rather than as a missing feature
+		if p.opts.AuditRetention > 0 {
+			cutoff := now.Add(-p.opts.AuditRetention)
+			n, err := p.opts.Store.SweepAudit(ctx, cutoff)
+			if err != nil && ctx.Err() == nil {
+				slog.Error("audit sweep failed", "error", err)
+			}
+			//at info even though the dedupe sweep is quieter: this is evidence
+			//being deleted, and it should be visible in the log that it went
+			if n > 0 {
+				slog.Info("swept expired audit rows", "removed", n, "older_than", cutoff,
+					"retention", p.opts.AuditRetention)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -347,11 +378,12 @@ func (p *Pipeline) sweep(ctx context.Context) {
 	}
 }
 
-func (p *Pipeline) audit(ctx context.Context, e event.Event, out string, status store.Status, attempts int, cause string) {
+func (p *Pipeline) audit(ctx context.Context, e event.Event, out, rule string, status store.Status, attempts int, cause string) {
 	audit(ctx, p.opts.Store, store.Record{
 		EventID:  e.EventID,
 		VIN:      e.VIN,
 		Output:   out,
+		Rule:     rule,
 		Status:   status,
 		Attempts: attempts,
 		Error:    cause,

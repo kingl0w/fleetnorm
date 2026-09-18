@@ -28,20 +28,31 @@ outputs:
 
 # Rules are evaluated top to bottom and every match fires, so an event can be
 # routed by more than one rule. Destinations are deduped per event.
+#
+# `name` is optional and free-form, and two rules may share one. It is recorded
+# in the audit log against every event the rule routes, which is how you answer
+# "which rule sent this fault there" once there are more than a few. A rule with
+# no name gets its position instead: rule[0], rule[1].
 rules:
-  - match: { severity: [critical, high] }
+  - name: urgent-to-shop
+    match: { severity: [critical, high] }
     route: [my-shop, console]
 
   # spn entries are numbers or inclusive "lo-hi" ranges.
-  - match: { source: replay, spn: [3226, 3216, "4000-4100"] }
+  - name: aftertreatment-watchlist
+    match: { source: replay, spn: [3226, 3216, "4000-4100"] }
     route: [my-shop]
 
-  - match: {}                      # catch-all
+  - name: everything-to-console
+    match: {}                      # catch-all
     route: [console]
 
 # store:
 #   path: ./fleetnorm.db
 #   dedupe_retention: 168h
+#   audit_retention: 2160h         # 90 days. 0 keeps audit rows forever, which
+#                                  # is a legitimate choice for a permanent
+#                                  # record rather than an error.
 
 # server:
 #   addr: ":8080"
