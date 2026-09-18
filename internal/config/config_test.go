@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -115,15 +116,15 @@ outputs: [{ type: stdout, name: console }]
 rules: [{ match: {}, route: [console] }]
 `, want: []string{`adapter "replay": type is required`}},
 		{name: "strict on a non-file adapter", yaml: `
-adapters: [{ type: geotab, name: g, strict: false }]
+adapters: [{ type: samsara, name: g, strict: false }]
 outputs: [{ type: stdout, name: console }]
 rules: [{ match: {}, route: [console] }]
-`, want: []string{"strict is only valid for a file adapter"}},
+`, want: []string{"strict is not valid for a samsara adapter"}},
 		{name: "unknown adapter type", yaml: `
-adapters: [{ type: geotab, name: g }]
+adapters: [{ type: samsara, name: g }]
 outputs: [{ type: stdout, name: console }]
 rules: [{ match: {}, route: [console] }]
-`, want: []string{`unknown adapter type "geotab"`}},
+`, want: []string{`unknown adapter type "samsara"`}},
 		{name: "file adapter without path", yaml: `
 adapters: [{ type: file, name: replay }]
 outputs: [{ type: stdout, name: console }]
@@ -265,7 +266,7 @@ rules: [{ match: { spn: [-1] }, route: [console] }]
 
 		//Validate reports everything at once, it does not stop at the first.
 		{name: "several problems at once", yaml: `
-adapters: [{ type: geotab, name: g }]
+adapters: [{ type: samsara, name: g }]
 outputs: [{ type: stdout, name: console }]
 rules: [{ match: { severity: [nope] }, route: [nowhere] }]
 `, want: []string{"unknown adapter type", "unknown severity", "unknown output"}},
@@ -400,5 +401,168 @@ rules: [{ match: {}, route: [console] }]
 	}
 	if c.Adapters[0].Strict == nil || *c.Adapters[0].Strict {
 		t.Errorf("strict = %v, want the configured false", c.Adapters[0].Strict)
+	}
+}
+
+// a geotab adapter with everything required, as a format string the error tests
+// splice into.
+const validGeotab = `
+adapters:
+  - type: geotab
+    name: fleet-geotab
+    database: mydb
+    username_env: GEOTAB_USER
+    password_env: GEOTAB_PASS
+    seed_from: 720h
+outputs:
+  - { type: stdout, name: console }
+rules:
+  - { match: {}, route: [console] }
+`
+
+func geotabEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("GEOTAB_USER", "driver@example.com")
+	t.Setenv("GEOTAB_PASS", "not-a-real-password")
+}
+
+func TestGeotabDefaults(t *testing.T) {
+	geotabEnv(t)
+	c, err := parse(strings.NewReader(validGeotab))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := c.Adapters[0]
+	if a.Server != DefaultGeotabServer {
+		t.Errorf("server = %q, want %q", a.Server, DefaultGeotabServer)
+	}
+	if a.ResultsLimit != DefaultGeotabResultsLimit {
+		t.Errorf("results_limit = %d, want %d", a.ResultsLimit, DefaultGeotabResultsLimit)
+	}
+	if time.Duration(a.CacheRefresh) != DefaultGeotabCacheRefresh {
+		t.Errorf("cache_refresh = %v, want %v", a.CacheRefresh, DefaultGeotabCacheRefresh)
+	}
+	if a.Username() != "driver@example.com" || a.Password() != "not-a-real-password" {
+		t.Error("credentials were not resolved from the environment")
+	}
+	if a.SeedFrom == nil {
+		t.Fatal("seed_from was not parsed")
+	}
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	if got, want := a.SeedFrom.At(now), now.Add(-720*time.Hour); !got.Equal(want) {
+		t.Errorf("seed_from.At = %v, want %v", got, want)
+	}
+}
+
+func TestGeotabSeedFrom(t *testing.T) {
+	geotabEnv(t)
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		value string
+		want  time.Time
+		bad   string
+	}{
+		{value: "720h", want: now.Add(-720 * time.Hour)},
+		//explicit intent, not omission: only data from here on
+		{value: "0s", want: now},
+		{value: "2026-01-01T00:00:00Z", want: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{value: "2026-01-01T00:00:00-05:00", want: time.Date(2026, 1, 1, 5, 0, 0, 0, time.UTC)},
+		{value: "-1h", bad: "must not be negative"},
+		{value: "yesterday", bad: "neither a duration"},
+		{value: "2026-01-01", bad: "neither a duration"},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			src := strings.Replace(validGeotab, "seed_from: 720h", "seed_from: "+strconv.Quote(tc.value), 1)
+			c, err := parse(strings.NewReader(src))
+			if tc.bad != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.bad) {
+					t.Fatalf("err = %v, want it to mention %q", err, tc.bad)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := c.Adapters[0].SeedFrom.At(now); !got.Equal(tc.want) {
+				t.Errorf("At = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// the failure this whole field exists to prevent: a new feed with no seed date
+// produces nothing, forever, while every health signal stays green.
+func TestGeotabWithoutSeedFromFailsAtLoad(t *testing.T) {
+	geotabEnv(t)
+	src := strings.Replace(validGeotab, "    seed_from: 720h\n", "", 1)
+	_, err := parse(strings.NewReader(src))
+	if err == nil {
+		t.Fatal("a geotab adapter with no seed_from must not load")
+	}
+	if !strings.Contains(err.Error(), "seed_from is required") {
+		t.Errorf("err = %v, want it to name seed_from", err)
+	}
+	//and it says what to do about it
+	if !strings.Contains(err.Error(), "0s") {
+		t.Errorf("err = %v, want it to mention the 0s escape hatch", err)
+	}
+}
+
+func TestGeotabErrors(t *testing.T) {
+	for name, tc := range map[string]struct {
+		replace, with, want string
+	}{
+		"no database":       {"    database: mydb\n", "", "database is required"},
+		"no username_env":   {"    username_env: GEOTAB_USER\n", "", "username_env is required"},
+		"no password_env":   {"    password_env: GEOTAB_PASS\n", "", "password_env is required"},
+		"unset credential":  {"username_env: GEOTAB_USER", "username_env: GEOTAB_NOPE", "unset or empty"},
+		"results_limit big": {"seed_from: 720h", "seed_from: 720h\n    results_limit: 60000", "results_limit must be"},
+		"poll too fast":     {"seed_from: 720h", "seed_from: 720h\n    poll_interval: 100ms", "poll_interval must be at least"},
+		"file field":        {"seed_from: 720h", "seed_from: 720h\n    path: ./x.json", "path is not valid for a geotab adapter"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			geotabEnv(t)
+			src := strings.Replace(validGeotab, tc.replace, tc.with, 1)
+			_, err := parse(strings.NewReader(src))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// a geotab field on a file adapter is a typo, not a no-op
+func TestGeotabFieldsRejectedOnFileAdapter(t *testing.T) {
+	src := strings.Replace(valid,
+		"- { type: file, name: replay, path: ./testdata/events.json }",
+		"- { type: file, name: replay, path: ./testdata/events.json, database: mydb, seed_from: 720h }", 1)
+	_, err := parse(strings.NewReader(src))
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"database is not valid for a file adapter", "seed_from is not valid for a file adapter"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, want it to mention %q", err, want)
+		}
+	}
+}
+
+func TestAdapterCredentialsAreNotPrintable(t *testing.T) {
+	geotabEnv(t)
+	c, err := parse(strings.NewReader(validGeotab))
+	if err != nil {
+		t.Fatal(err)
+	}
+	//the whole config, since that is what reaches a startup log
+	for _, format := range []string{"%v", "%+v", "%#v", "%s"} {
+		out := fmt.Sprintf(format, c.Adapters)
+		for _, secret := range []string{"driver@example.com", "not-a-real-password"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("%s printed a credential: %s", format, out)
+			}
+		}
+		if !strings.Contains(out, "[REDACTED]") {
+			t.Errorf("%s = %s, want the credentials shown as redacted", format, out)
+		}
 	}
 }

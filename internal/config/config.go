@@ -28,6 +28,15 @@ const (
 	DefaultDedupeRetention = 7 * 24 * time.Hour
 	DefaultServerAddr      = ":8080"
 	BackoffExponential     = "exponential"
+
+	DefaultGeotabServer       = "my.geotab.com"
+	DefaultGeotabResultsLimit = 10000
+	DefaultGeotabCacheRefresh = time.Hour
+	MaxGeotabResultsLimit     = 50000
+
+	//GetFeed allows 60 calls a minute, so one poll a second is the documented
+	//floor. the adapter paces itself to it regardless.
+	MinGeotabPollInterval = time.Second
 )
 
 type Config struct {
@@ -48,6 +57,44 @@ type Adapter struct {
 	//file only, default true: a record that will not normalize fails the poll
 	//instead of being skipped. false gives the standard adapter contract.
 	Strict *bool `yaml:"strict"`
+
+	Server       string    `yaml:"server"`        // geotab, default my.geotab.com
+	Database     string    `yaml:"database"`      // geotab
+	UsernameEnv  string    `yaml:"username_env"`  // geotab: env var holding the user
+	PasswordEnv  string    `yaml:"password_env"`  // geotab: env var holding the password
+	SeedFrom     *SeedFrom `yaml:"seed_from"`     // geotab, required
+	ResultsLimit int       `yaml:"results_limit"` // geotab
+	CacheRefresh Duration  `yaml:"cache_refresh"` // geotab
+
+	//the values of UsernameEnv and PasswordEnv, read once at load so the
+	//credentials Validate checked are the ones the adapter authenticates with.
+	//unexported: never marshaled, printed or logged.
+	username, password string
+}
+
+// Username and Password are the credentials resolved at load time. treat them
+// as secrets.
+func (a Adapter) Username() string { return a.username }
+func (a Adapter) Password() string { return a.password }
+
+// String redacts the credentials, since a Config lands in startup logs and
+// errors.
+func (a Adapter) String() string {
+	return fmt.Sprintf("{Type:%s Name:%s PollInterval:%s Path:%s Strict:%v Server:%s Database:%s "+
+		"UsernameEnv:%s PasswordEnv:%s SeedFrom:%v ResultsLimit:%d CacheRefresh:%s username:%s password:%s}",
+		a.Type, a.Name, a.PollInterval, a.Path, a.Strict, a.Server, a.Database,
+		a.UsernameEnv, a.PasswordEnv, a.SeedFrom, a.ResultsLimit, a.CacheRefresh,
+		redact(a.username), redact(a.password))
+}
+
+// GoString redacts too: %#v bypasses String, and that output goes into tickets.
+func (a Adapter) GoString() string { return "config.Adapter" + a.String() }
+
+func redact(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "[REDACTED]"
 }
 
 type Output struct {
@@ -155,6 +202,18 @@ func (c *Config) applyDefaults() {
 			strict := true
 			a.Strict = &strict
 		}
+		if a.Type != "geotab" {
+			continue
+		}
+		if a.Server == "" {
+			a.Server = DefaultGeotabServer
+		}
+		if a.ResultsLimit == 0 {
+			a.ResultsLimit = DefaultGeotabResultsLimit
+		}
+		if a.CacheRefresh == 0 {
+			a.CacheRefresh = Duration(DefaultGeotabCacheRefresh)
+		}
 	}
 	for i := range c.Outputs {
 		o := &c.Outputs[i]
@@ -188,6 +247,18 @@ func (c *Config) applyDefaults() {
 // resolveSecrets reads each webhook key from the environment once, before
 // validation, so a config that passes Validate has its secrets in hand.
 func (c *Config) resolveSecrets() {
+	for i := range c.Adapters {
+		a := &c.Adapters[i]
+		if a.Type != "geotab" {
+			continue
+		}
+		if a.UsernameEnv != "" {
+			a.username = os.Getenv(a.UsernameEnv)
+		}
+		if a.PasswordEnv != "" {
+			a.password = os.Getenv(a.PasswordEnv)
+		}
+	}
 	for i := range c.Outputs {
 		o := &c.Outputs[i]
 		if o.Type == "webhook" && o.SecretEnv != "" {
@@ -228,13 +299,28 @@ func (c *Config) Validate() error {
 			if a.Path == "" {
 				bad("%s: path is required for a file adapter", where)
 			}
+		case "geotab":
+			errs = append(errs, validateGeotab(where, a)...)
 		case "":
 			bad("%s: type is required", where)
 		default:
 			bad("%s: unknown adapter type %q", where, a.Type)
 		}
-		if a.Strict != nil && a.Type != "file" {
-			bad("%s: strict is only valid for a file adapter", where)
+		//catches a field landing under the wrong list item, the way a typo'd key
+		//would be caught by KnownFields
+		for field, set := range map[string]bool{
+			"strict": a.Strict != nil && a.Type != "file",
+			"path":   a.Path != "" && a.Type != "file",
+			"server": a.Server != "" && a.Type != "geotab", "database": a.Database != "" && a.Type != "geotab",
+			"username_env":  a.UsernameEnv != "" && a.Type != "geotab",
+			"password_env":  a.PasswordEnv != "" && a.Type != "geotab",
+			"seed_from":     a.SeedFrom != nil && a.Type != "geotab",
+			"results_limit": a.ResultsLimit != 0 && a.Type != "geotab",
+			"cache_refresh": a.CacheRefresh != 0 && a.Type != "geotab",
+		} {
+			if set {
+				bad("%s: %s is not valid for a %s adapter", where, field, a.Type)
+			}
 		}
 	}
 
@@ -304,6 +390,46 @@ func (c *Config) Validate() error {
 		bad("server.addr is required")
 	}
 	return errors.Join(errs...)
+}
+
+func validateGeotab(where string, a Adapter) []error {
+	var errs []error
+	bad := func(format string, args ...any) {
+		errs = append(errs, fmt.Errorf(format, args...))
+	}
+	if a.Database == "" {
+		bad("%s: database is required for a geotab adapter", where)
+	}
+	//a missing credential fails at startup rather than at the first poll
+	for _, cred := range []struct{ field, env, value string }{
+		{"username_env", a.UsernameEnv, a.username},
+		{"password_env", a.PasswordEnv, a.password},
+	} {
+		if cred.env == "" {
+			bad("%s: %s is required for a geotab adapter", where, cred.field)
+		} else if cred.value == "" {
+			bad("%s: %s %q is unset or empty in the environment", where, cred.field, cred.env)
+		}
+	}
+	//GetFeed with no fromVersion returns no data at all, only the newest
+	//version, so a feed started with no seed date is silently empty forever.
+	//"only new data from now on" is spelled seed_from: 0s, which is intent
+	//rather than omission.
+	if a.SeedFrom == nil {
+		bad("%s: seed_from is required for a geotab adapter: a new feed with no seed date reads nothing, forever. "+
+			"use a duration like 720h, an RFC3339 timestamp, or 0s for new data only", where)
+	}
+	if a.ResultsLimit < 0 || a.ResultsLimit > MaxGeotabResultsLimit {
+		bad("%s: results_limit must be 1-%d, got %d", where, MaxGeotabResultsLimit, a.ResultsLimit)
+	}
+	if a.CacheRefresh <= 0 {
+		bad("%s: cache_refresh must be positive", where)
+	}
+	if a.PollInterval > 0 && time.Duration(a.PollInterval) < MinGeotabPollInterval {
+		bad("%s: poll_interval must be at least %s, the documented GetFeed limit of %d calls a minute",
+			where, MinGeotabPollInterval, 60)
+	}
+	return errs
 }
 
 func validateWebhook(where string, o Output) []error {
@@ -442,4 +568,53 @@ func parseSPNRange(v string) (SPNRange, error) {
 		return SPNRange{}, fmt.Errorf("spn range %q: lower bound is above upper bound", v)
 	}
 	return SPNRange{Lo: l, Hi: h}, nil
+}
+
+// SeedFrom is where a change feed starts when it has no cursor yet. in YAML it
+// is either a duration back from now, "720h", or an absolute RFC3339 timestamp,
+// "2026-01-01T00:00:00Z".
+//
+// it has no default on purpose. a feed started with neither a cursor nor a seed
+// date reads nothing at all, forever, while every health signal stays green, so
+// omitting it is a config error. "only new data from here" is written as
+// "0s", which says so.
+type SeedFrom struct {
+	Duration time.Duration //back from the time of the poll
+	Time     time.Time     //absolute; zero when Duration is the one in use
+}
+
+// At returns the date to seed from, given the time of the poll.
+func (s SeedFrom) At(now time.Time) time.Time {
+	if !s.Time.IsZero() {
+		return s.Time
+	}
+	return now.Add(-s.Duration)
+}
+
+func (s SeedFrom) String() string {
+	if !s.Time.IsZero() {
+		return s.Time.Format(time.RFC3339)
+	}
+	return s.Duration.String()
+}
+
+func (s *SeedFrom) UnmarshalYAML(n *yaml.Node) error {
+	var v string
+	if err := n.Decode(&v); err != nil {
+		return fmt.Errorf("line %d: seed_from must be a string like \"720h\" or \"2026-01-01T00:00:00Z\"", n.Line)
+	}
+	//a duration first: RFC3339 cannot be confused for one
+	if d, err := time.ParseDuration(v); err == nil {
+		if d < 0 {
+			return fmt.Errorf("line %d: seed_from %q must not be negative; it already means time before now", n.Line, v)
+		}
+		*s = SeedFrom{Duration: d}
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return fmt.Errorf("line %d: seed_from %q is neither a duration like \"720h\" nor an RFC3339 timestamp", n.Line, v)
+	}
+	*s = SeedFrom{Time: t.UTC()}
+	return nil
 }
