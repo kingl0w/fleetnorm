@@ -382,6 +382,57 @@ empty string.
 exist only on enriched faults. Their absence is normal, never a validation
 failure, and never an empty tag.
 
+### The test fixtures are generated
+
+The FaultData the geotab tests read lives in
+`internal/adapter/geotab/testdata`, and it is generated rather than written by
+hand:
+
+```sh
+make fixtures      # go run ./cmd/genfixtures
+```
+
+**None of it is real.** The VINs are impossible rather than merely unassigned,
+since every one contains a letter a real VIN cannot; device names are
+`unit-0001`; and no part of it came from a fleet. The SPNs are a short
+hand-written table of well-known J1939 numbers with their meanings in a comment,
+not a dictionary. SAE sells the digital annex and this does not reproduce it.
+
+The generator is deterministic. The same `-seed` produces byte-identical files,
+which is what lets `TestFixturesAreGenerated` regenerate at the committed seed
+and compare against what is checked in. A generator change that nobody
+regenerated fails there rather than leaving the two quietly describing different
+things.
+
+Each file is a `GetFeed` response, `data` plus `toVersion`, so a fixture can be
+handed to the test double as-is:
+
+| File | What it covers |
+| --- | --- |
+| `entities.json` | the reference set enrichment resolves against, by type and id |
+| `feed_ordinary.json` | faults where everything resolves |
+| `feed_revisions.json` | one id at several versions, an incrementing count, a dismissal |
+| `feed_edge.json` | a non-SPN diagnostic, an FMI outside 0–31, an unresolved reference, a device with no VIN, enriched and bare faults, lamp combinations, an unrecognized severity |
+| `feed_skip.json` | records that fail validation, staying under the skip ceiling |
+| `feed_ceiling.json` | enough failures to trip the ceiling |
+
+**A new mapping case goes in the generator, not the JSON.** Editing a fixture by
+hand makes it disagree with the generator, and the drift test will say so on the
+next run. Add the case to `internal/adapter/geotab/fixtures`, run
+`make fixtures`, and commit both.
+
+The generator's command lives in `cmd/genfixtures` rather than beside the
+fixtures because the go tool ignores every directory named `testdata`: a
+generator in there would never be built or vetted, and would rot with nothing
+failing. The generation itself is a package so the drift test can call it
+without shelling out.
+
+Some geotab tests are still hand-written, and deliberately. The ones that build
+a variant with `strings.Replace` on a literal, and assert against specific SPN,
+VIN and controller values, are testing one mapping decision each; pointing them
+at generated records would mean rewriting their assertions rather than swapping
+their input.
+
 ### Sessions and the server redirect
 
 The adapter authenticates with `Authenticate`, which exchanges the password for

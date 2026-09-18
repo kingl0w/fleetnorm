@@ -11,6 +11,14 @@ on every event as `schema_version` and its stability promise lives in
 
 ## [Unreleased]
 
+### Added
+
+- **Generated Geotab test fixtures.** `make fixtures` regenerates the synthetic
+  FaultData in `internal/adapter/geotab/testdata` from
+  `cmd/genfixtures`. Deterministic at a fixed seed, and a test fails if the
+  committed fixtures drift from the generator. The fixtures are synthetic and
+  contain no real fleet data.
+
 ## [0.1.0] - 2026-09-18
 
 First release. Emits events at schema version `0.1.0`.
