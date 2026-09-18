@@ -331,6 +331,7 @@ guess is hidden, and `raw` still has the record as it arrived.
 | `fmi` | resolved failure mode code, when it is 0–31 |
 | `occurrence_count` | `count` |
 | `severity` | mapped from `severity`, see above |
+| `lamp_status` | `faultLampState`, when present |
 | `description` | `faultDescription`, when present |
 | `raw` | the FaultData JSON verbatim, before enrichment |
 
@@ -338,9 +339,13 @@ A device with no VIN still gets a `vin`, because the field is required: the
 device id is used and `geotab.vin_fallback` is set to `device_id`, so nobody
 mistakes it for a real VIN.
 
-`lamp_status` is deliberately not set. Geotab reports five separate lamp
-properties and collapsing them into one string would pick a winner and lose the
-rest, so all five are tagged instead.
+`lamp_status` comes from `faultLampState`, which is the J1939 lamp state and so
+is exactly what the schema field is for. The four booleans — `amberWarningLamp`,
+`redStopLamp`, `malfunctionLamp` and `protectWarningLamp` — are separate
+properties that happen to be lamp related, and they stay in tags only. All five,
+`faultLampState` included, are also tagged, so the field and the tag are not an
+either/or. A fault with no `faultLampState` leaves `lamp_status` absent rather
+than empty.
 
 ### Tag keys
 
@@ -377,11 +382,52 @@ empty string.
 exist only on enriched faults. Their absence is normal, never a validation
 failure, and never an empty tag.
 
+### Sessions and the server redirect
+
+The adapter authenticates with `Authenticate`, which exchanges the password for
+a session, and every call after that carries a `sessionId` instead. The password
+appears on exactly one request and never again.
+
+Authentication is lazy: it happens on the first call, not at construction, so
+building an adapter does no network IO and a bad server name fails on the first
+poll rather than at startup.
+
+`Authenticate` returns two things that belong together: the credentials holding
+the `sessionId`, and a `path`. The path is either the literal string
+`ThisServer`, meaning the server you authenticated against is the right one, or
+a different server, meaning **every later call must go there**. A customer
+database that does not live on `my.geotab.com` is a normal deployment, not an
+edge case.
+
+The `sessionId` and the resolved server are stored as one value and are never
+used apart, because a `sessionId` is only valid against the server that issued
+it. Carrying one to a different host fails as an authentication error, which
+names the wrong cause and would send someone looking at the credentials. A
+redirect is logged at info, so a database on another server is visible rather
+than something you infer.
+
+Sessions last up to 14 days. The adapter does not track that: it uses the
+session until the server rejects it. A JSON-RPC error carrying
+`InvalidUserException` means the session is expired or revoked, so the client
+re-authenticates once and retries the call. If the retry is rejected the same
+way, the credentials are wrong rather than stale, and it becomes a whole poll
+failure instead of a login attempt on every tick.
+
+Re-authentication is shared. Concurrent calls that all hit the same expired
+session produce one re-authentication between them, not one each: whoever gets
+there first replaces the session, and everyone else picks up the new one. This
+is a mutex held across the `Authenticate` call, which is the point — it
+serializes the authentications rather than running them in parallel.
+
+`ExtendSession` is deliberately not used. It is deprecated and answers with an
+`ArgumentException` saying so, so re-authenticating is the supported path.
+
 ### Failures, cursor and rate limits
 
-Whole poll failures are rejected credentials, a refused connection, an
-undecodable response, and a `GetFeed` result with no `toVersion` — there is no
-cursor to advance to, so none is invented.
+Whole poll failures are rejected credentials, including a session that is still
+refused after re-authenticating, a refused connection, an undecodable response,
+and a `GetFeed` result with no `toVersion` — there is no cursor to advance to,
+so none is invented.
 
 Per record skips are FaultData records that fail validation after mapping, most
 often a record with no `id` or no `version`. The synthetic id is
