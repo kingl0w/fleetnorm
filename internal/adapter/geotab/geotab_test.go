@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -71,46 +72,86 @@ var entities = map[string]string{
 	"b1":                `{"id":"b1","name":"T-1187","vehicleIdentificationNumber":"3AKJHHDR8LSLT1234"}`,
 }
 
-// request is one decoded call the fake server saw.
+// request is one call the fake server saw, kept raw so a test can prove what
+// was and was not on the wire.
 type request struct {
 	Method string
 	Params map[string]json.RawMessage
+	Body   string
 }
 
 // server is a fake MyGeotab. feeds are served in order, one per GetFeed call,
-// and Get lookups are counted so a test can prove the cache is doing its job.
+// Get lookups are counted so a test can prove the cache is doing its job, and
+// the session knobs let a test drive expiry and redirects.
 type server struct {
 	t     *testing.T
+	host  string
 	feeds []feedResult
 
 	mu       sync.Mutex
 	requests []request
 	gets     map[string]int //entity id -> times looked up
 	calls    int            //GetFeed calls served
+	auths    int            //Authenticate calls served
 
-	//set to make the next lookup of this type fail
-	failType string
+	path     string //what Authenticate returns as path
+	session  string //sessionId to issue; incremented per auth when empty
+	authErr  string //when set, Authenticate fails with this exception name
+	failType string //make the next lookup of this type fail
+
+	rejectAll bool   //every non-auth call returns InvalidUserException
+	expired   string //a call carrying this sessionId returns InvalidUserException
+	rawCode   int    //status code for GetFeed, when set
+	rawBody   string //verbatim GetFeed response, when set
 }
 
-func newServer(t *testing.T, feeds ...feedResult) (*server, *http.Client, func()) {
+// harness wires one http.Client to any number of fake servers, keyed by host,
+// so a test can assert that a host stopped receiving requests.
+type harness struct {
+	t      *testing.T
+	router *hostRouter
+	client *http.Client
+}
+
+func newHarness(t *testing.T) *harness {
 	t.Helper()
-	s := &server{t: t, feeds: feeds, gets: map[string]int{}}
+	h := &harness{t: t, router: &hostRouter{routes: map[string]string{}, next: http.DefaultTransport}}
+	h.client = &http.Client{Transport: h.router}
+	return h
+}
+
+func (h *harness) serve(host string, feeds ...feedResult) *server {
+	h.t.Helper()
+	s := &server{t: h.t, host: host, feeds: feeds, gets: map[string]int{}, path: thisServer}
 	ts := httptest.NewServer(http.HandlerFunc(s.serve))
-	client := ts.Client()
-	client.Transport = rewrite{ts.URL, client.Transport}
-	return s, client, ts.Close
+	h.t.Cleanup(ts.Close)
+	h.router.add(host, ts.URL)
+	return s
 }
 
-// rewrite points every request at the test server, whatever host the adapter
-// built from its configured server name.
-type rewrite struct {
-	base string
-	next http.RoundTripper
+// hostRouter sends each request to the server registered for its host. an
+// unregistered host is an error rather than a silent fallthrough, which is what
+// makes "nothing reached the old server" a real assertion.
+type hostRouter struct {
+	mu     sync.Mutex
+	routes map[string]string
+	next   http.RoundTripper
 }
 
-func (r rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
+func (r *hostRouter) add(host, base string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.routes[host] = strings.TrimPrefix(base, "http://")
+}
+
+func (r *hostRouter) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.mu.Lock()
+	target, ok := r.routes[req.URL.Hostname()]
+	r.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("no fake server for host %q", req.URL.Hostname())
+	}
 	u := *req.URL
-	target := strings.TrimPrefix(r.base, "http://")
 	u.Scheme, u.Host = "http", target
 	clone := req.Clone(req.Context())
 	clone.URL = &u
@@ -118,18 +159,45 @@ func (r rewrite) RoundTrip(req *http.Request) (*http.Response, error) {
 	return r.next.RoundTrip(clone)
 }
 
+func newServer(t *testing.T, feeds ...feedResult) (*server, *http.Client, func()) {
+	t.Helper()
+	h := newHarness(t)
+	return h.serve(defaultHost, feeds...), h.client, func() {}
+}
+
+const defaultHost = "my.geotab.com"
+
 func (s *server) serve(w http.ResponseWriter, r *http.Request) {
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.t.Errorf("unreadable request: %v", err)
+		return
+	}
 	var req struct {
 		Method string                     `json:"method"`
 		Params map[string]json.RawMessage `json:"params"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		s.t.Errorf("undecodable request: %v", err)
 		return
 	}
 	s.mu.Lock()
-	s.requests = append(s.requests, request{Method: req.Method, Params: req.Params})
+	s.requests = append(s.requests, request{Method: req.Method, Params: req.Params, Body: string(raw)})
 	s.mu.Unlock()
+
+	if req.Method == "Authenticate" {
+		s.serveAuth(w)
+		return
+	}
+	//every other method needs a live session. expiring one sessionId rather
+	//than counting calls keeps this independent of how requests interleave.
+	s.mu.Lock()
+	reject := s.rejectAll || (s.expired != "" && strings.Contains(string(raw), s.expired))
+	s.mu.Unlock()
+	if reject {
+		writeError(w, invalidUser, "session has expired")
+		return
+	}
 
 	switch req.Method {
 	case "GetFeed":
@@ -141,11 +209,44 @@ func (s *server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) serveAuth(w http.ResponseWriter) {
+	s.mu.Lock()
+	s.auths++
+	n := s.auths
+	if s.authErr != "" {
+		err := s.authErr
+		s.mu.Unlock()
+		writeError(w, err, "bad credentials")
+		return
+	}
+	id := s.session
+	if id == "" {
+		id = fmt.Sprintf("session-%d", n)
+	}
+	path := s.path
+	s.mu.Unlock()
+
+	writeResult(w, authResult{
+		Credentials: sessionCreds{Database: "mydb", UserName: "driver@example.com", SessionID: id},
+		Path:        path,
+	})
+}
+
 func (s *server) serveFeed(w http.ResponseWriter) {
 	s.mu.Lock()
 	i := s.calls
 	s.calls++
+	code, body := s.rawCode, s.rawBody
 	s.mu.Unlock()
+
+	if code != 0 || body != "" {
+		if code == 0 {
+			code = http.StatusOK
+		}
+		w.WriteHeader(code)
+		w.Write([]byte(body))
+		return
+	}
 	if i >= len(s.feeds) {
 		writeResult(w, feedResult{ToVersion: "empty"})
 		return
@@ -194,6 +295,18 @@ func writeResult(w http.ResponseWriter, result any) {
 	w.Write(b)
 }
 
+func writeError(w http.ResponseWriter, name, message string) {
+	b, err := json.Marshal(map[string]any{"error": map[string]any{
+		"message": message,
+		"errors":  []map[string]string{{"name": name, "message": message}},
+	}})
+	if err != nil {
+		panic(err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
 // feedParams returns the params of the nth GetFeed request the server saw.
 func (s *server) feedParams(t *testing.T, n int) map[string]json.RawMessage {
 	t.Helper()
@@ -217,6 +330,37 @@ func (s *server) getCount(id string) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.gets[id]
+}
+
+// setExpired makes every later call carrying this sessionId fail the way a
+// real expiry does.
+func (s *server) setExpired(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.expired = id
+}
+
+func (s *server) authCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.auths
+}
+
+// methods returns every method the server was called with, in order.
+func (s *server) methods() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.requests))
+	for i, r := range s.requests {
+		out[i] = r.Method
+	}
+	return out
+}
+
+func (s *server) snapshot() []request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]request(nil), s.requests...)
 }
 
 func feed(toVersion string, records ...string) feedResult {
@@ -639,26 +783,22 @@ func TestSkipCeiling(t *testing.T) {
 
 func TestWholePollFailures(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		body string
-		code int
-		want string
+		name  string
+		setup func(*server)
+		want  string
 	}{
-		{"auth rejected", `{"error":{"message":"bad","errors":[{"name":"InvalidUserException","message":"bad credentials"}]}}`, 200, "InvalidUserException"},
-		{"undecodable", `<html>proxy error</html>`, 200, "undecodable"},
-		{"server error", `nope`, 500, "500"},
-		{"no toVersion", `{"result":{"data":[]}}`, 200, "toVersion"},
+		{"auth rejected", func(s *server) { s.authErr = invalidUser }, invalidUser},
+		{"undecodable", func(s *server) { s.rawBody = `<html>proxy error</html>` }, "undecodable"},
+		{"server error", func(s *server) { s.rawCode, s.rawBody = 500, "nope" }, "500"},
+		{"no toVersion", func(s *server) { s.rawBody = `{"result":{"data":[]}}` }, "toVersion"},
+		{"session never valid", func(s *server) { s.rejectAll = true }, "credentials are wrong rather than stale"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tc.code)
-				w.Write([]byte(tc.body))
-			}))
-			defer ts.Close()
-			hc := ts.Client()
-			hc.Transport = rewrite{ts.URL, hc.Transport}
+			h := newHarness(t)
+			srv := h.serve(defaultHost)
+			tc.setup(srv)
 
-			events, cursor, err := newAdapter(t, hc).Poll(context.Background(), "v7")
+			events, cursor, err := newAdapter(t, h.client).Poll(context.Background(), "v7")
 			if err == nil {
 				t.Fatal("want an error")
 			}
@@ -672,6 +812,21 @@ func TestWholePollFailures(t *testing.T) {
 				t.Errorf("cursor = %q, want it unchanged", cursor)
 			}
 		})
+	}
+}
+
+// a session that is rejected forever must not become a login attempt per call
+func TestReauthIsAttemptedOnce(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost)
+	srv.rejectAll = true
+
+	if _, _, err := newAdapter(t, h.client).Poll(context.Background(), "v1"); err == nil {
+		t.Fatal("want an error")
+	}
+	//first auth, rejected call, re-auth, rejected retry
+	if got := srv.authCount(); got != 2 {
+		t.Errorf("authenticated %d times, want 2: one on first use and one retry", got)
 	}
 }
 
@@ -761,5 +916,172 @@ func TestCacheDeduplicatesWithinOneCall(t *testing.T) {
 	}
 	if len(batches) != 1 || len(batches[0]) != 1 {
 		t.Errorf("fetched %v, want one id asked for once", batches)
+	}
+}
+
+func TestAuthenticatesOnceAndCarriesTheSession(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost, feed("v1", bareFault), feed("v2", enrichedFault))
+	a := newAdapter(t, h.client)
+
+	poll(t, a, "")
+	poll(t, a, "v1")
+
+	if got := srv.authCount(); got != 1 {
+		t.Errorf("authenticated %d times, want 1: a session lasts up to 14 days", got)
+	}
+	if got, want := srv.methods()[0], "Authenticate"; got != want {
+		t.Errorf("first call was %q, want %q", got, want)
+	}
+
+	for _, r := range srv.snapshot() {
+		if r.Method == "Authenticate" {
+			if !strings.Contains(r.Body, "hunter2") {
+				t.Error("Authenticate did not carry the password")
+			}
+			continue
+		}
+		if strings.Contains(r.Body, "hunter2") {
+			t.Errorf("%s carried the password: %s", r.Method, r.Body)
+		}
+		if !strings.Contains(r.Body, "session-1") {
+			t.Errorf("%s did not carry the sessionId: %s", r.Method, r.Body)
+		}
+	}
+}
+
+// construction must not touch the network: a typo in the config should fail at
+// load, not by hanging on a connect.
+func TestNewDoesNoNetworkIO(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost, feed("v1"))
+	newAdapter(t, h.client)
+	if got := srv.authCount(); got != 0 {
+		t.Errorf("authenticated %d times during construction, want 0", got)
+	}
+}
+
+func TestThisServerKeepsTheConfiguredServer(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost, feed("v1", bareFault))
+	srv.path = thisServer
+
+	events, _ := poll(t, newAdapter(t, h.client), "")
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if got := srv.authCount(); got != 1 {
+		t.Errorf("authenticated %d times, want 1", got)
+	}
+}
+
+// a customer database that does not live on the configured server is a normal
+// deployment. the sessionId is only valid against the server that issued it.
+func TestPathRedirectsEveryLaterCall(t *testing.T) {
+	h := newHarness(t)
+	configured := h.serve(defaultHost)
+	configured.path = "https://my23.geotab.com"
+	redirected := h.serve("my23.geotab.com", feed("v1", bareFault))
+
+	events, cursor := poll(t, newAdapter(t, h.client), "")
+	if len(events) != 1 || cursor != "v1" {
+		t.Fatalf("got %d events, cursor %q; want the redirected server's feed", len(events), cursor)
+	}
+
+	//the configured server authenticated and then heard nothing more
+	if got := configured.methods(); len(got) != 1 || got[0] != "Authenticate" {
+		t.Errorf("configured server saw %v, want only Authenticate", got)
+	}
+	for _, m := range redirected.methods() {
+		if m == "Authenticate" {
+			t.Error("re-authenticated against the redirected server; the session was already valid there")
+		}
+	}
+	if got := redirected.methods(); len(got) == 0 {
+		t.Fatal("the redirected server received nothing")
+	}
+}
+
+func TestExpiredSessionReauthenticatesOnceAndRetries(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost, feed("v1", bareFault), feed("v2", enrichedFault))
+	a := newAdapter(t, h.client)
+
+	poll(t, a, "")
+	if got := srv.authCount(); got != 1 {
+		t.Fatalf("authenticated %d times on the first poll, want 1", got)
+	}
+
+	//the session expires between polls
+	srv.setExpired("session-1")
+	events, cursor := poll(t, a, "v1")
+
+	if got := srv.authCount(); got != 2 {
+		t.Errorf("authenticated %d times, want exactly 2", got)
+	}
+	if len(events) != 1 || cursor != "v2" {
+		t.Errorf("got %d events, cursor %q; the retry should have succeeded", len(events), cursor)
+	}
+	//and the retry carried the new session, not the dead one
+	last := srv.snapshot()
+	body := last[len(last)-1].Body
+	if strings.Contains(body, "session-1") {
+		t.Errorf("retry reused the expired sessionId: %s", body)
+	}
+}
+
+// under -race: every in-flight call hitting an expired session must produce one
+// re-authentication between them, not one each.
+func TestConcurrentCallsReauthenticateOnce(t *testing.T) {
+	h := newHarness(t)
+	srv := h.serve(defaultHost)
+	a := newAdapter(t, h.client)
+
+	//prime a session, then expire exactly that one for everyone
+	if _, err := a.client.current(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv.setExpired("session-1")
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			//the error does not matter here; the authentication count does
+			a.client.resolve(context.Background(), typeDevice, []string{"b1"})
+		}()
+	}
+	wg.Wait()
+
+	if got := srv.authCount(); got != 2 {
+		t.Errorf("authenticated %d times, want 2: one to prime and one shared re-auth", got)
+	}
+}
+
+func TestLampStatusComesFromFaultLampState(t *testing.T) {
+	noLamp := `{"id":"x","version":"v","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"severity":"None"}`
+	h := newHarness(t)
+	h.serve(defaultHost, feed("v1", bareFault, noLamp))
+
+	events, _ := poll(t, newAdapter(t, h.client), "")
+	if len(events) != 2 {
+		t.Fatalf("got %d events, want 2", len(events))
+	}
+	present, absent := events[0], events[1]
+
+	if got, want := present.LampStatus, "Red"; got != want {
+		t.Errorf("lamp_status = %q, want %q", got, want)
+	}
+	//the tag stays too: the field and the tag are not an either/or
+	if got, want := present.Tags[TagFaultLampState], "Red"; got != want {
+		t.Errorf("%s = %q, want %q", TagFaultLampState, got, want)
+	}
+
+	if absent.LampStatus != "" {
+		t.Errorf("lamp_status = %q, want absent when the source reported no lamp state", absent.LampStatus)
+	}
+	if _, set := absent.Tags[TagFaultLampState]; set {
+		t.Errorf("%s must be absent, not an empty string", TagFaultLampState)
 	}
 }

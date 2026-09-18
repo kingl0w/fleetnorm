@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -20,50 +22,147 @@ const (
 	MaxResultsLimit    = 50000
 )
 
-// credentials is the MyGeotab authentication object. json tags are the API's
-// spelling; the struct never leaves this package.
-//
-// ponytail: password on every call rather than Authenticate then sessionId.
-// MyGeotab accepts it, and it removes a session to refresh and a second failure
-// mode. switch to sessions if call volume ever makes the extra auth work
-// matter.
-type credentials struct {
+// login is the MyGeotab Authenticate payload. it is the only request the
+// password ever appears on; every call after it carries a sessionId instead.
+type login struct {
 	Database string `json:"database"`
 	UserName string `json:"userName"`
 	Password string `json:"password"`
 }
 
-// String redacts, so a credentials struct can never reach a log by being
-// embedded in something someone printed.
-func (c credentials) String() string {
-	return fmt.Sprintf("{Database:%s UserName:[REDACTED] Password:[REDACTED]}", c.Database)
+// String redacts, so a login struct can never reach a log by being embedded in
+// something someone printed.
+func (l login) String() string {
+	return fmt.Sprintf("{Database:%s UserName:[REDACTED] Password:[REDACTED]}", l.Database)
 }
 
-func (c credentials) GoString() string { return "geotab.credentials" + c.String() }
+func (l login) GoString() string { return "geotab.login" + l.String() }
+
+// sessionCreds is the credentials object every call after Authenticate carries.
+// no password: it is not needed once a session exists and sending it anyway
+// would put it on every request in the journal of anything in between.
+type sessionCreds struct {
+	Database  string `json:"database"`
+	UserName  string `json:"userName"`
+	SessionID string `json:"sessionId"`
+}
+
+// session pairs a sessionId with the server that issued it. they are one value
+// and are never used apart: a sessionId is only valid against its own server,
+// so carrying one to a different host fails as an authentication error rather
+// than as anything that names the real cause.
+type session struct {
+	creds sessionCreds
+	url   string //the resolved apiv1 endpoint this sessionId belongs to
+}
+
+// path values Authenticate returns to mean "the server you asked is correct"
+const thisServer = "ThisServer"
 
 type client struct {
+	name  string //adapter name, for logs
 	http  *http.Client
-	url   string
-	creds credentials
+	url   string //endpoint built from the configured server
+	login login
 	feed_ *limiter
 	get_  *limiter
+
+	//guards sess and serializes authentication. held across the Authenticate
+	//call on purpose: that is what makes concurrent callers share one
+	//authentication instead of each starting their own.
+	mu   sync.Mutex
+	sess *session
 }
 
-func newClient(server, database, username, password string, timeout time.Duration, hc *http.Client) *client {
+func newClient(name, server, database, username, password string, timeout time.Duration, hc *http.Client) *client {
 	if hc == nil {
 		hc = &http.Client{Timeout: timeout}
 	}
-	url := server
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		url = "https://" + url
-	}
 	return &client{
+		name:  name,
 		http:  hc,
-		url:   strings.TrimSuffix(url, "/") + "/apiv1",
-		creds: credentials{Database: database, UserName: username, Password: password},
+		url:   endpoint(server),
+		login: login{Database: database, UserName: username, Password: password},
 		feed_: newLimiter(time.Minute / FeedCallsPerMinute),
 		get_:  newLimiter(time.Minute / GetCallsPerMinute),
 	}
+}
+
+// endpoint turns a server name or URL into the apiv1 endpoint to post to.
+func endpoint(server string) string {
+	u := strings.TrimSpace(server)
+	if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+		u = "https://" + u
+	}
+	u = strings.TrimSuffix(u, "/")
+	if !strings.HasSuffix(u, "/apiv1") {
+		u += "/apiv1"
+	}
+	return u
+}
+
+// authResult is what Authenticate returns. path is either another server, which
+// is the one that must be used from then on, or ThisServer.
+type authResult struct {
+	Credentials sessionCreds `json:"credentials"`
+	Path        string       `json:"path"`
+}
+
+// current returns a usable session, authenticating on first use. construction
+// does no network IO, so this is where the first call pays for it.
+func (c *client) current(ctx context.Context) (*session, error) {
+	c.mu.Lock()
+	if s := c.sess; s != nil {
+		c.mu.Unlock()
+		return s, nil
+	}
+	c.mu.Unlock()
+	return c.refresh(ctx, nil)
+}
+
+// refresh replaces stale with a new session, unless another caller got there
+// first. sessions last up to 14 days, so this runs on first use and then only
+// when the server tells us the session is no longer good.
+func (c *client) refresh(ctx context.Context, stale *session) (*session, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	//someone else already re-authenticated while we were failing
+	if c.sess != nil && c.sess != stale {
+		return c.sess, nil
+	}
+	s, err := c.authenticate(ctx)
+	if err != nil {
+		return nil, err
+	}
+	c.sess = s
+	return s, nil
+}
+
+// authenticate exchanges the password for a sessionId and the server that
+// sessionId belongs to. caller holds c.mu.
+func (c *client) authenticate(ctx context.Context) (*session, error) {
+	var res authResult
+	if err := c.post(ctx, c.url, "Authenticate", map[string]any{
+		"database": c.login.Database, "userName": c.login.UserName, "password": c.login.Password,
+	}, &res); err != nil {
+		return nil, err
+	}
+	if res.Credentials.SessionID == "" {
+		return nil, fmt.Errorf("Authenticate returned no sessionId")
+	}
+
+	url := c.url
+	//a database that does not live on the configured server is a normal
+	//deployment, not an edge case: the sessionId is only valid against the
+	//server that issued it, so everything after this goes there.
+	if res.Path != "" && res.Path != thisServer {
+		url = endpoint(res.Path)
+	}
+	if url != c.url {
+		slog.Info("geotab session is on a different server than configured",
+			"adapter", c.name, "configured", c.url, "server", url)
+	}
+	return &session{creds: res.Credentials, url: url}, nil
 }
 
 // feedResult is one GetFeed page. data stays raw so every record reaches the
@@ -160,15 +259,56 @@ func (e apiError) Error() string {
 	return e.Message
 }
 
-// call posts one JSON-RPC request and decodes result into out. every failure
-// here is a whole poll failure: nothing was read, so nothing can be skipped.
+// call runs one authenticated request, re-authenticating once if the server
+// says the session is no longer good. every failure here is a whole poll
+// failure: nothing was read, so nothing can be skipped.
 func (c *client) call(ctx context.Context, method string, params map[string]any, out any) error {
-	params["credentials"] = c.creds
+	sess, err := c.current(ctx)
+	if err != nil {
+		return err
+	}
+	err = c.do(ctx, sess, method, params, out)
+	if !isInvalidUser(err) {
+		return err
+	}
+
+	//the session expired or was revoked. one re-authentication and one retry:
+	//if the credentials are simply wrong, retrying forever would just be a
+	//login attempt every poll.
+	sess, authErr := c.refresh(ctx, sess)
+	if authErr != nil {
+		return authErr
+	}
+	if err := c.do(ctx, sess, method, params, out); err != nil {
+		if isInvalidUser(err) {
+			return fmt.Errorf("%w (re-authenticated and it was still rejected, so the credentials are wrong rather than stale)", err)
+		}
+		return err
+	}
+	return nil
+}
+
+// do posts one call against a session. the password is not part of this: only
+// Authenticate ever sends it.
+func (c *client) do(ctx context.Context, sess *session, method string, params map[string]any, out any) error {
+	//params is rebuilt per attempt so a retry cannot inherit the last one's
+	//credentials
+	body := make(map[string]any, len(params)+1)
+	for k, v := range params {
+		body[k] = v
+	}
+	body["credentials"] = sess.creds
+	return c.post(ctx, sess.url, method, body, out)
+}
+
+// post is the raw transport: one JSON-RPC request, one decoded result. it
+// knows nothing about sessions, so authenticate can use it too.
+func (c *client) post(ctx context.Context, url, method string, params map[string]any, out any) error {
 	body, err := json.Marshal(map[string]any{"method": method, "params": params})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -204,6 +344,23 @@ func (c *client) call(ctx context.Context, method string, params map[string]any,
 	}
 	return nil
 }
+
+// isInvalidUser reports whether err is the server saying the session or the
+// credentials are no good, which is the one error worth re-authenticating for.
+func isInvalidUser(err error) bool {
+	var api apiError
+	if !errors.As(err, &api) {
+		return false
+	}
+	for _, e := range api.Errors {
+		if e.Name == invalidUser {
+			return true
+		}
+	}
+	return strings.Contains(api.Message, invalidUser)
+}
+
+const invalidUser = "InvalidUserException"
 
 // snippet keeps a failing body short enough to log without pasting a whole
 // error page into the journal.

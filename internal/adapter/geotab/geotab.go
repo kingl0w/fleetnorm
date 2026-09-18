@@ -154,7 +154,7 @@ func New(o Options) (*Adapter, error) {
 	if o.Timeout <= 0 {
 		o.Timeout = DefaultTimeout
 	}
-	c := newClient(o.Server, o.Database, o.Username, o.Password, o.Timeout, o.HTTPClient)
+	c := newClient(o.Name, o.Server, o.Database, o.Username, o.Password, o.Timeout, o.HTTPClient)
 	return &Adapter{
 		name:     o.Name,
 		client:   c,
@@ -172,7 +172,7 @@ func (a *Adapter) Name() string { return a.name }
 // in %v of anything holding it.
 func (a *Adapter) String() string {
 	return fmt.Sprintf("geotab.Adapter{Name:%s Server:%s Database:%s ResultsLimit:%d Credentials:%s}",
-		a.name, a.client.url, a.client.creds.Database, a.limit, a.client.creds)
+		a.name, a.client.url, a.client.login.Database, a.limit, a.client.login)
 }
 
 // GoString redacts too: %#v bypasses String, and that output goes into tickets.
@@ -421,8 +421,13 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 		e.OccurrenceCount = &count
 	}
 
-	//the five lamps a technician actually reads. no schema field models them,
-	//so all five are tagged under stable key names.
+	//faultLampState is the J1939 lamp state, which is what lamp_status is for.
+	//the four booleans below are separate properties that happen to be lamp
+	//related, so they stay in tags only.
+	e.LampStatus = fd.FaultLampState
+
+	//the five lamps a technician actually reads. the schema models one of them,
+	//so all five are also tagged under stable key names.
 	setBool(e.Tags, TagAmberWarningLamp, fd.AmberWarningLamp)
 	setBool(e.Tags, TagRedStopLamp, fd.RedStopLamp)
 	setBool(e.Tags, TagMalfunctionLamp, fd.MalfunctionLamp)
