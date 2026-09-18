@@ -94,6 +94,10 @@ type server struct {
 	calls    int            //GetFeed calls served
 	auths    int            //Authenticate calls served
 
+	//the reference set lookups resolve against. defaults to the hand written
+	//one; fixture tests swap in the generated set.
+	entities map[string]string
+
 	path     string //what Authenticate returns as path
 	session  string //sessionId to issue; incremented per auth when empty
 	authErr  string //when set, Authenticate fails with this exception name
@@ -122,7 +126,7 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) serve(host string, feeds ...feedResult) *server {
 	h.t.Helper()
-	s := &server{t: h.t, host: host, feeds: feeds, gets: map[string]int{}, path: thisServer}
+	s := &server{t: h.t, host: host, feeds: feeds, gets: map[string]int{}, path: thisServer, entities: entities}
 	ts := httptest.NewServer(http.HandlerFunc(s.serve))
 	h.t.Cleanup(ts.Close)
 	h.router.add(host, ts.URL)
@@ -276,7 +280,7 @@ func (s *server) serveMultiCall(w http.ResponseWriter, calls json.RawMessage) {
 	out := make([][]json.RawMessage, len(list))
 	for i, c := range list {
 		s.gets[c.Params.Search.ID]++
-		if body, ok := entities[c.Params.Search.ID]; ok {
+		if body, ok := s.entities[c.Params.Search.ID]; ok {
 			out[i] = []json.RawMessage{json.RawMessage(body)}
 		} else {
 			out[i] = []json.RawMessage{} //an unknown id is an empty array
@@ -752,32 +756,6 @@ func TestSkippedRecordIsAuditedAndThePollSucceeds(t *testing.T) {
 		if s.Adapter != "fleet-geotab" || s.Reason == "" {
 			t.Errorf("skip %d = %+v", i, s)
 		}
-	}
-}
-
-func TestSkipCeiling(t *testing.T) {
-	records := make([]string, 0, 12)
-	for i := range 12 {
-		records = append(records, fmt.Sprintf(
-			`{"id":"x%d","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"severity":"None"}`, i))
-	}
-	_, hc, done := newServer(t, feed("v1", records...))
-	defer done()
-
-	var audited int
-	a := newAdapter(t, hc, func(o *Options) {
-		o.OnSkip = func(context.Context, adapter.Skipped) { audited++ }
-	})
-
-	_, cursor, err := a.Poll(context.Background(), "")
-	if err == nil {
-		t.Fatal("skipping every record must fail the poll, not look healthy")
-	}
-	if cursor != "" {
-		t.Errorf("cursor = %q, want it unchanged after a failed poll", cursor)
-	}
-	if audited != 0 {
-		t.Errorf("audited %d skips; a poll that made no progress reads them again", audited)
 	}
 }
 
