@@ -1,0 +1,47 @@
+# fleetnorm example config. Every field with a default is shown commented out.
+
+adapters:
+  - type: file
+    name: replay
+    path: ./testdata/events.json
+    poll_interval: 5s
+    # strict: true                 # a record that will not normalize fails the
+                                   # poll. File-adapter default and a deliberate
+                                   # deviation from the adapter contract; set
+                                   # false to skip, audit, and carry on.
+    #
+    # A record carrying its own `source` keeps it, so a replay of captured
+    # vendor events stays labelled with that vendor. Rules matching
+    # `source: replay` will not see those events.
+
+outputs:
+  - type: stdout
+    name: console
+
+  - type: webhook
+    name: my-shop
+    url: https://shop.example/ingest
+    secret_env: SHOP_SECRET        # HMAC-SHA256 over the body, sent as X-Fleetnorm-Signature
+    timeout: 10s
+    retry: { max_attempts: 5, backoff: exponential }
+    # buffer: 256                  # queued events before this output starts dropping
+
+# Rules are evaluated top to bottom and every match fires, so an event can be
+# routed by more than one rule. Destinations are deduped per event.
+rules:
+  - match: { severity: [critical, high] }
+    route: [my-shop, console]
+
+  # spn entries are numbers or inclusive "lo-hi" ranges.
+  - match: { source: replay, spn: [3226, 3216, "4000-4100"] }
+    route: [my-shop]
+
+  - match: {}                      # catch-all
+    route: [console]
+
+# store:
+#   path: ./fleetnorm.db
+#   dedupe_retention: 168h
+
+# server:
+#   addr: ":8080"
