@@ -165,3 +165,47 @@ Consumers are welcome to validate against the published schema. It is standard
 JSON Schema, draft 2020-12, with no custom keywords. The object is closed:
 additional top level properties are rejected, which is what forces unmodeled
 fields into `tags` instead of letting them accumulate at the top level.
+
+## Open questions
+
+Things the schema cannot currently say. Nothing here is implemented, and nothing
+here should be inferred from the code: these are written down so the next person
+who hits one finds the reasoning rather than rediscovering it.
+
+### An event cannot say that it supersedes another
+
+A normalized event has no way to express "this replaces that one".
+
+The Geotab adapter is where this first bit. MyGeotab's change feed resends a
+record whenever it changes, with a newer version, so a fault that gets dismissed
+or whose occurrence count increments arrives again as a revision of a record
+fleetnorm has already delivered. The adapter makes every revision a distinct
+event, by putting the version in `event_id`, because the alternative is worse:
+with a stable `event_id`, deduplication silently swallows the event that says a
+critical fault was dismissed.
+
+That works, and it leaves a consumer holding several events that are revisions of
+one fault with nothing in the schema saying so. The relationship is carried by
+convention in tags: `geotab.source_id` is the same across revisions and
+`geotab.version` orders them. A consumer has to know that convention, and it is
+per adapter.
+
+There are two ways out.
+
+**Keep it in tags.** Cheap, already working, no schema change. Each adapter
+publishes its own grouping and ordering tags and documents them. The cost is that
+every consumer learns a different convention per source, and a generic consumer
+cannot do anything useful with a revision it does not have adapter specific
+knowledge about.
+
+**Add a first-class `supersedes` field.** An optional string holding the
+`event_id` this event replaces, within the same `source`. Honest, uniform, and
+something a generic consumer can act on without knowing which vendor it came
+from. The cost is real: it is a schema change, it needs rules about what
+consumers may assume (is the superseded event still valid? may it be deleted?),
+and it needs the store and any output that maintains state to have an answer.
+
+The second is the honest one, and a second adapter reading any change feed will
+want it too, which is the argument for doing it once rather than per adapter. It
+is not being decided here. When it is decided, it is a minor version bump if the
+field is optional and additive.
