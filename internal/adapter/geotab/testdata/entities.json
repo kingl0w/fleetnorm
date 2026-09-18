@@ -1,0 +1,204 @@
+{
+  "Controller": {
+    "ControllerAftertreatment1": {
+      "id": "ControllerAftertreatment1",
+      "name": "Aftertreatment #1"
+    },
+    "ControllerBrakesSystemController": {
+      "id": "ControllerBrakesSystemController",
+      "name": "Brakes - System Controller"
+    },
+    "ControllerEngine1": {
+      "id": "ControllerEngine1",
+      "name": "Engine #1"
+    },
+    "ControllerTransmission1": {
+      "id": "ControllerTransmission1",
+      "name": "Transmission #1"
+    }
+  },
+  "Device": {
+    "b0001": {
+      "id": "b0001",
+      "name": "unit-0001",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0001"
+    },
+    "b0002": {
+      "id": "b0002",
+      "name": "unit-0002",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0002"
+    },
+    "b0003": {
+      "id": "b0003",
+      "name": "unit-0003",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0003"
+    },
+    "b0004": {
+      "id": "b0004",
+      "name": "unit-0004",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0004"
+    },
+    "b0005": {
+      "id": "b0005",
+      "name": "unit-0005",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0005"
+    },
+    "b0006": {
+      "id": "b0006",
+      "name": "unit-0006",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0006"
+    },
+    "b0007": {
+      "id": "b0007",
+      "name": "unit-0007",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE0007"
+    },
+    "b0008": {
+      "id": "b0008",
+      "name": "unit-0008"
+    }
+  },
+  "Diagnostic": {
+    "DiagnosticObdP0420": {
+      "id": "DiagnosticObdP0420",
+      "name": "Catalyst System Efficiency Below Threshold",
+      "code": 420,
+      "diagnosticType": "ObdFault"
+    },
+    "DiagnosticProprietary8801": {
+      "id": "DiagnosticProprietary8801",
+      "name": "Vendor specific body controller fault",
+      "code": 8801,
+      "diagnosticType": "ProprietaryFault"
+    },
+    "DiagnosticSpn100": {
+      "id": "DiagnosticSpn100",
+      "name": "Engine Oil Pressure",
+      "code": 100,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn102": {
+      "id": "DiagnosticSpn102",
+      "name": "Engine Intake Manifold #1 Pressure",
+      "code": 102,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn110": {
+      "id": "DiagnosticSpn110",
+      "name": "Engine Coolant Temperature",
+      "code": 110,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn157": {
+      "id": "DiagnosticSpn157",
+      "name": "Engine Injector Metering Rail #1 Pressure",
+      "code": 157,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn1761": {
+      "id": "DiagnosticSpn1761",
+      "name": "Aftertreatment 1 Diesel Exhaust Fluid Tank Volume",
+      "code": 1761,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn190": {
+      "id": "DiagnosticSpn190",
+      "name": "Engine Speed",
+      "code": 190,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn3216": {
+      "id": "DiagnosticSpn3216",
+      "name": "Aftertreatment 1 Intake NOx",
+      "code": 3216,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn3226": {
+      "id": "DiagnosticSpn3226",
+      "name": "Aftertreatment 1 Outlet NOx",
+      "code": 3226,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn3251": {
+      "id": "DiagnosticSpn3251",
+      "name": "Aftertreatment 1 DPF Differential Pressure",
+      "code": 3251,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn5246": {
+      "id": "DiagnosticSpn5246",
+      "name": "Aftertreatment SCR Operator Inducement Severity",
+      "code": 5246,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn639": {
+      "id": "DiagnosticSpn639",
+      "name": "J1939 Network #1",
+      "code": 639,
+      "diagnosticType": "SuspectParameterNumber"
+    },
+    "DiagnosticSpn84": {
+      "id": "DiagnosticSpn84",
+      "name": "Wheel-Based Vehicle Speed",
+      "code": 84,
+      "diagnosticType": "SuspectParameterNumber"
+    }
+  },
+  "FailureMode": {
+    "FailureModeFmi0": {
+      "id": "FailureModeFmi0",
+      "name": "Data valid but above normal operating range, most severe",
+      "code": 0
+    },
+    "FailureModeFmi1": {
+      "id": "FailureModeFmi1",
+      "name": "Data valid but below normal operating range, most severe",
+      "code": 1
+    },
+    "FailureModeFmi16": {
+      "id": "FailureModeFmi16",
+      "name": "Data valid but above normal operating range, moderately severe",
+      "code": 16
+    },
+    "FailureModeFmi18": {
+      "id": "FailureModeFmi18",
+      "name": "Data valid but below normal operating range, moderately severe",
+      "code": 18
+    },
+    "FailureModeFmi2": {
+      "id": "FailureModeFmi2",
+      "name": "Data erratic, intermittent or incorrect",
+      "code": 2
+    },
+    "FailureModeFmi20": {
+      "id": "FailureModeFmi20",
+      "name": "Data drifted high",
+      "code": 20
+    },
+    "FailureModeFmi254": {
+      "id": "FailureModeFmi254",
+      "name": "Not an FMI",
+      "code": 254
+    },
+    "FailureModeFmi3": {
+      "id": "FailureModeFmi3",
+      "name": "Voltage above normal or shorted high",
+      "code": 3
+    },
+    "FailureModeFmi31": {
+      "id": "FailureModeFmi31",
+      "name": "Condition exists",
+      "code": 31
+    },
+    "FailureModeFmi4": {
+      "id": "FailureModeFmi4",
+      "name": "Voltage below normal or shorted low",
+      "code": 4
+    },
+    "FailureModeFmi5": {
+      "id": "FailureModeFmi5",
+      "name": "Current below normal or open circuit",
+      "code": 5
+    }
+  }
+}

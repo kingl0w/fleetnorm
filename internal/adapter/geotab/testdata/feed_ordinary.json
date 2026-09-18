@@ -1,0 +1,329 @@
+{
+  "data": [
+    {
+      "id": "a913823363",
+      "version": "0000000000000101",
+      "dateTime": "2026-09-14T08:08:00.000Z",
+      "device": {
+        "id": "b0008"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn84"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi16"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 13,
+      "severity": "Critical",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": true,
+      "protectWarningLamp": true,
+      "faultLampState": "Red",
+      "classCode": "Ecm",
+      "faultState": "Pending",
+      "sourceAddress": 243
+    },
+    {
+      "id": "a976234996",
+      "version": "0000000000000102",
+      "dateTime": "2026-09-14T08:45:00.000Z",
+      "device": {
+        "id": "b0004"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn639"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi5"
+      },
+      "controller": {
+        "id": "ControllerTransmission1"
+      },
+      "count": 13,
+      "severity": "Unknown",
+      "amberWarningLamp": true,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": true,
+      "faultLampState": "None",
+      "classCode": "Obd",
+      "faultState": "Inactive",
+      "sourceAddress": 123
+    },
+    {
+      "id": "a917003753",
+      "version": "0000000000000103",
+      "dateTime": "2026-09-14T09:06:00.000Z",
+      "device": {
+        "id": "b0007"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn100"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi3"
+      },
+      "controller": {
+        "id": "ControllerTransmission1"
+      },
+      "count": 6,
+      "severity": "None",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": false,
+      "protectWarningLamp": true,
+      "faultLampState": "Protect",
+      "classCode": "Obd",
+      "faultState": "Active",
+      "sourceAddress": 174
+    },
+    {
+      "id": "a665313738",
+      "version": "0000000000000104",
+      "dateTime": "2026-09-14T09:51:00.000Z",
+      "device": {
+        "id": "b0005"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn110"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi20"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 8,
+      "severity": "None",
+      "amberWarningLamp": false,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": true,
+      "faultLampState": "None",
+      "classCode": "Ecm",
+      "faultState": "Pending",
+      "sourceAddress": 13
+    },
+    {
+      "id": "a257179696",
+      "version": "0000000000000105",
+      "dateTime": "2026-09-14T10:03:00.000Z",
+      "device": {
+        "id": "b0002"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn84"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi1"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 6,
+      "severity": "Warning",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": true,
+      "protectWarningLamp": true,
+      "faultLampState": "Red",
+      "classCode": "Obd",
+      "faultState": "Active",
+      "sourceAddress": 65
+    },
+    {
+      "id": "a574450154",
+      "version": "0000000000000106",
+      "dateTime": "2026-09-14T10:18:00.000Z",
+      "device": {
+        "id": "b0004"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn102"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi16"
+      },
+      "controller": {
+        "id": "ControllerAftertreatment1"
+      },
+      "count": 8,
+      "severity": "Unknown",
+      "amberWarningLamp": false,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "Red",
+      "classCode": "Ecm",
+      "faultState": "Active",
+      "sourceAddress": 192
+    },
+    {
+      "id": "a390604771",
+      "version": "0000000000000107",
+      "dateTime": "2026-09-14T10:52:00.000Z",
+      "device": {
+        "id": "b0001"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn102"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi4"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 17,
+      "severity": "None",
+      "amberWarningLamp": false,
+      "redStopLamp": true,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "Protect",
+      "classCode": "Proprietary",
+      "faultState": "Active",
+      "sourceAddress": 40
+    },
+    {
+      "id": "a068172918",
+      "version": "0000000000000108",
+      "dateTime": "2026-09-14T10:53:00.000Z",
+      "device": {
+        "id": "b0001"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn639"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi4"
+      },
+      "controller": {
+        "id": "ControllerEngine1"
+      },
+      "count": 3,
+      "severity": "None",
+      "amberWarningLamp": false,
+      "redStopLamp": true,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "None",
+      "classCode": "Obd",
+      "faultState": "Active",
+      "sourceAddress": 1
+    },
+    {
+      "id": "a487025350",
+      "version": "0000000000000109",
+      "dateTime": "2026-09-14T11:09:00.000Z",
+      "device": {
+        "id": "b0006"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn639"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi20"
+      },
+      "controller": {
+        "id": "ControllerAftertreatment1"
+      },
+      "count": 20,
+      "severity": "Warning",
+      "amberWarningLamp": true,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "Red",
+      "classCode": "Proprietary",
+      "faultState": "Inactive",
+      "sourceAddress": 27
+    },
+    {
+      "id": "a733900267",
+      "version": "000000000000010A",
+      "dateTime": "2026-09-14T11:28:00.000Z",
+      "device": {
+        "id": "b0002"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn3226"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi5"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 4,
+      "severity": "Warning",
+      "amberWarningLamp": true,
+      "redStopLamp": false,
+      "malfunctionLamp": true,
+      "protectWarningLamp": true,
+      "faultLampState": "Protect",
+      "classCode": "Ecm",
+      "faultState": "Pending",
+      "sourceAddress": 45
+    },
+    {
+      "id": "a811728789",
+      "version": "000000000000010B",
+      "dateTime": "2026-09-14T11:45:00.000Z",
+      "device": {
+        "id": "b0006"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn84"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi18"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 20,
+      "severity": "Unknown",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": false,
+      "protectWarningLamp": true,
+      "faultLampState": "Protect",
+      "classCode": "Obd",
+      "faultState": "Pending",
+      "sourceAddress": 26
+    },
+    {
+      "id": "a012899973",
+      "version": "000000000000010C",
+      "dateTime": "2026-09-14T11:51:00.000Z",
+      "device": {
+        "id": "b0007"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn3226"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi4"
+      },
+      "controller": {
+        "id": "ControllerAftertreatment1"
+      },
+      "count": 19,
+      "severity": "Warning",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "Red",
+      "classCode": "Ecm",
+      "faultState": "Pending",
+      "sourceAddress": 125
+    }
+  ],
+  "toVersion": "000000000000010D"
+}
