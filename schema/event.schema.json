@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ianfrushon/fleetnorm/schema/event.schema.json",
+  "title": "fleetnorm normalized event",
+  "description": "A single normalized commercial-vehicle fault/health event. Stable contract: breaking changes bump the major of schema_version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "vin",
+    "occurred_at",
+    "received_at",
+    "source",
+    "source_type",
+    "severity"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Semver of this schema. Breaking changes bump major.",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "event_id": {
+      "description": "Stable id, unique within source.",
+      "type": "string",
+      "minLength": 1
+    },
+    "vin": {
+      "type": "string",
+      "minLength": 1
+    },
+    "occurred_at": {
+      "description": "When the fault occurred, RFC3339 UTC.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "received_at": {
+      "description": "When fleetnorm ingested it, RFC3339 UTC.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "source": {
+      "description": "Adapter name that produced this event.",
+      "type": "string",
+      "minLength": 1
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["oem", "tsp", "file"]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "low", "medium", "high", "critical"]
+    },
+    "unit_id": {
+      "description": "Fleet's own asset number.",
+      "type": "string"
+    },
+    "spn": {
+      "description": "J1939 Suspect Parameter Number.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "fmi": {
+      "description": "J1939 Failure Mode Identifier.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 31
+    },
+    "occurrence_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lamp_status": {
+      "description": "Source-reported lamp state, verbatim (amber, red, protect, ...).",
+      "type": "string"
+    },
+    "odometer_km": {
+      "type": "number"
+    },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lat", "lon"],
+      "properties": {
+        "lat": { "type": "number", "minimum": -90, "maximum": 90 },
+        "lon": { "type": "number", "minimum": -180, "maximum": 180 }
+      }
+    },
+    "description": {
+      "type": "string"
+    },
+    "tags": {
+      "description": "Source fields we do not model, and owner-supplied labels. Never silently discard a source field: put it here.",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "raw": {
+      "description": "Verbatim source payload. Always preserved so a consumer can recover what normalization did not model."
+    }
+  }
+}

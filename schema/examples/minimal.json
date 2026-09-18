@@ -1,0 +1,10 @@
+{
+  "schema_version": "0.1.0",
+  "event_id": "replay-000001",
+  "vin": "1XKYDP9X1MJ123456",
+  "occurred_at": "2026-09-14T13:04:05Z",
+  "received_at": "2026-09-14T13:04:09Z",
+  "source": "replay",
+  "source_type": "file",
+  "severity": "low"
+}

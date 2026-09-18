@@ -1,0 +1,30 @@
+{
+  "schema_version": "0.1.0",
+  "event_id": "replay-000002",
+  "vin": "3AKJHHDR8LSLT1234",
+  "occurred_at": "2026-09-14T13:40:00Z",
+  "received_at": "2026-09-14T13:40:02Z",
+  "source": "replay",
+  "source_type": "file",
+  "severity": "critical",
+  "unit_id": "T-1187",
+  "spn": 3226,
+  "fmi": 20,
+  "occurrence_count": 4,
+  "lamp_status": "red",
+  "odometer_km": 412883.5,
+  "location": { "lat": 41.8781, "lon": -87.6298 },
+  "description": "Aftertreatment 1 SCR Intake NOx sensor: data drifted high",
+  "tags": {
+    "derate_pending": "true",
+    "source_fault_code": "SPN3226-FMI20",
+    "terminal": "chicago-yard"
+  },
+  "raw": {
+    "faultCode": "SPN3226-FMI20",
+    "lamp": "RED_STOP",
+    "occurrences": 4,
+    "reportedAt": "2026-09-14T08:40:00-05:00",
+    "vehicleId": "3AKJHHDR8LSLT1234"
+  }
+}
