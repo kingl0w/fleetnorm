@@ -66,7 +66,7 @@ const enrichedFault = `{
 
 // entities the multicall returns, keyed by the id asked for
 var entities = map[string]string{
-	"DiagnosticSpn3226": `{"id":"DiagnosticSpn3226","name":"SCR Intake NOx","code":3226,"diagnosticType":"SuspectParameterNumber"}`,
+	"DiagnosticSpn3226": `{"id":"DiagnosticSpn3226","name":"SCR Intake NOx","code":3226,"diagnosticType":"SuspectParameter","source":"SourceJ1939Id"}`,
 	"FailureModeFmi20":  `{"id":"FailureModeFmi20","name":"Data drifted high","code":20}`,
 	"ControllerEngine":  `{"id":"ControllerEngine","name":"Engine #1"}`,
 	"b1":                `{"id":"b1","name":"T-1187","vehicleIdentificationNumber":"3AKJHHDR8LSLT1234"}`,
@@ -704,7 +704,9 @@ func TestSeverityMapping(t *testing.T) {
 		{"None", event.SeverityInfo, ""},
 		{"Unknown", event.SeverityMedium, ""},
 		{"CatastrophicallyBad", defaultSeverity, "CatastrophicallyBad"},
-		{"", defaultSeverity, ""},
+		//bareFault has its red stop lamp on, and with no severity to go by the
+		//lamp raises it. TestLampsRaiseAnAbsentSeverityOnly covers the rest.
+		{"", event.SeverityCritical, ""},
 	} {
 		t.Run(tc.geotab+"|", func(t *testing.T) {
 			fault := strings.Replace(bareFault, `"severity": "Critical"`, `"severity": "`+tc.geotab+`"`, 1)
@@ -726,8 +728,8 @@ func TestSeverityMapping(t *testing.T) {
 }
 
 func TestSkippedRecordIsAuditedAndThePollSucceeds(t *testing.T) {
-	//no version, so there is no event_id that distinguishes revisions
-	broken := `{"id":"noVersion","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"severity":"None"}`
+	//no device, so there is no vin, and vin is required
+	broken := `{"id":"noDevice","version":"v8","dateTime":"2026-09-14T08:40:00Z","severity":"None"}`
 	//no id at all, so it is named by its position
 	nameless := `{"version":"v9","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"severity":"None"}`
 	_, hc, done := newServer(t, feed("v1", bareFault, broken, nameless))
@@ -748,7 +750,7 @@ func TestSkippedRecordIsAuditedAndThePollSucceeds(t *testing.T) {
 	if len(skipped) != 2 {
 		t.Fatalf("audited %d skips, want 2: %+v", len(skipped), skipped)
 	}
-	want := []string{"fleet-geotab:noVersion", "fleet-geotab:index:2"}
+	want := []string{"fleet-geotab:noDevice", "fleet-geotab:index:2"}
 	for i, s := range skipped {
 		if s.ID != want[i] {
 			t.Errorf("skip %d id = %q, want %q", i, s.ID, want[i])

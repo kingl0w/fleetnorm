@@ -18,6 +18,8 @@ package geotab
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -41,6 +43,11 @@ const (
 	TagSeverityRaw = "geotab.severity_raw"
 	TagVINFallback = "geotab.vin_fallback"
 
+	TagSeverityAbsent  = "geotab.severity_absent"
+	TagSeverityDerived = "geotab.severity_derived"
+	TagSentinelUnknown = "geotab.sentinel_unknown"
+	TagEventIDSource   = "geotab.event_id_source"
+
 	TagAmberWarningLamp   = "geotab.amber_warning_lamp"
 	TagRedStopLamp        = "geotab.red_stop_lamp"
 	TagMalfunctionLamp    = "geotab.malfunction_lamp"
@@ -54,9 +61,10 @@ const (
 	TagDismissDateTime = "geotab.dismiss_date_time"
 	TagDismissUser     = "geotab.dismiss_user"
 
-	TagDiagnosticCode  = "geotab.diagnostic_code"
-	TagDiagnosticType  = "geotab.diagnostic_type"
-	TagFailureModeCode = "geotab.failure_mode_code"
+	TagDiagnosticCode     = "geotab.diagnostic_code"
+	TagDiagnosticType     = "geotab.diagnostic_type"
+	TagDiagnosticStandard = "geotab.diagnostic_standard"
+	TagFailureModeCode    = "geotab.failure_mode_code"
 
 	TagEffectOnComponent = "geotab.effect_on_component"
 	TagRecommendation    = "geotab.recommendation"
@@ -74,7 +82,24 @@ const (
 // diagnosticSPN is the one Diagnostic type whose code is a J1939 SPN. any other
 // type carries a code from a different numbering scheme, and putting it in spn
 // would be a wrong number rather than a missing one.
-const diagnosticSPN = "SuspectParameterNumber"
+//
+// the value is what a live database sends. this guard first shipped comparing
+// against "SuspectParameterNumber", which no record carries, and that routed
+// every real J1939 fault away from spn without a sound.
+// TestCapturedSuspectParameterMapsToSPN pins it to a captured record.
+const diagnosticSPN = "SuspectParameter"
+
+// the diagnostic's source says which standard its code belongs to, which
+// diagnosticType alone does not: a Sid is a real vehicle fault on J1708, and
+// without this it is indistinguishable from an OBD code once it is in tags. it
+// supplements the spn guard rather than replacing it, since SourceJ1939Id turns
+// up on Sid diagnostics too. a source not listed here is tagged as it arrived.
+var diagnosticStandards = map[string]string{
+	"SourceJ1939Id":    "j1939",
+	"SourceJ1708Id":    "j1708",
+	"SourceObdId":      "obd",
+	"SourceGeotabGoId": "device",
+}
 
 // Geotab coalesces five properties into one severity in a documented precedence
 // order, so this maps that one field rather than inventing a second ranking.
@@ -88,7 +113,31 @@ var severityMap = map[string]event.Severity{
 
 // an unrecognized severity is not evidence the fault is minor, so it maps up
 // rather than down, and the original is kept in TagSeverityRaw.
+//
+// an absent severity gets the same default for the same reason, and it is the
+// common case rather than the odd one: live FaultData carries no severity field
+// at all. TagSeverityAbsent marks those, so a defaulted medium is never mistaken
+// for one Geotab reported. docs/adapters.md has the reasoning.
 const defaultSeverity = event.SeverityMedium
+
+// lampSeverity is what the lamps say when severity is absent, and only then.
+// it may raise severity and never lowers it. the red stop lamp is J1939 for
+// "stop the vehicle now", which is the standard's ranking rather than ours.
+// what is declined is the downgrade: all four lamps false was the shape of
+// every live record, on GoFaults where the lamps carry no information at all,
+// and no signal is not evidence of a minor fault.
+func lampSeverity(fd faultData) event.Severity {
+	on := func(lamp *bool) bool { return lamp != nil && *lamp }
+	switch {
+	case on(fd.RedStopLamp):
+		return event.SeverityCritical
+	case on(fd.AmberWarningLamp), on(fd.MalfunctionLamp), on(fd.ProtectWarningLamp):
+		//the same as the default today. explicit so the rule survives a change
+		//to the default.
+		return event.SeverityMedium
+	}
+	return defaultSeverity
+}
 
 const (
 	DefaultServer       = "my.geotab.com"
@@ -266,7 +315,9 @@ func (a *Adapter) enrich(ctx context.Context, records []faultData) map[string]ma
 			typeController:  fd.Controller,
 			typeDevice:      fd.Device,
 		} {
-			if r.ID != "" {
+			//a sentinel is never looked up: there is nothing behind it, and the
+			//Get budget is the tight one
+			if r.ID != "" && sentinelAt(typeName, r.ID) == notSentinel {
 				ids[typeName] = append(ids[typeName], r.ID)
 			}
 		}
@@ -286,8 +337,31 @@ func (a *Adapter) enrich(ctx context.Context, records []faultData) map[string]ma
 
 // ref is a MyGeotab id reference, which is all FaultData carries for its
 // related objects.
+//
+// the same property arrives in two shapes from a live database, a bare string
+// and an object with an id, sometimes on the same entity type:
+//
+//	"controller": "ControllerNoneId"
+//	"controller": {"id": "ControllerObdBodyId"}
+//
+// so every reference accepts both and the rest of the adapter sees one.
 type ref struct {
-	ID string `json:"id"`
+	ID string
+}
+
+func (r *ref) UnmarshalJSON(b []byte) error {
+	if len(b) > 0 && b[0] == '"' {
+		return json.Unmarshal(b, &r.ID)
+	}
+	//an object, or null, which leaves the id empty
+	var obj struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return err
+	}
+	r.ID = obj.ID
+	return nil
 }
 
 // faultData is one record off the feed. every field the mapping reads is here;
@@ -330,43 +404,74 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 	if fd.ID == "" {
 		return event.Event{}, fmt.Errorf("record has no id")
 	}
-	if fd.Version == "" {
-		//without a version the event_id is not unique per revision, which is the
-		//whole point of it
-		return event.Event{}, fmt.Errorf("record %s has no version", fd.ID)
+
+	//event_id has to differ per revision, which is the whole point of it, and
+	//the version is what does that. the fallback exists because FaultData from a
+	//live Get was seen with no version; whether GetFeed sends one is unverified.
+	//there the record's own bytes stand in: a changed revision hashes
+	//differently and survives dedupe, and a verbatim resend does not.
+	revision, hashed := fd.Version, false
+	if revision == "" {
+		sum := sha256.Sum256(fd.raw)
+		revision, hashed = hex.EncodeToString(sum[:8]), true
 	}
 
 	e := event.Event{
 		SchemaVersion: event.SchemaVersion,
-		EventID:       fd.ID + ":" + fd.Version,
+		EventID:       fd.ID + ":" + revision,
 		OccurredAt:    fd.DateTime.UTC(),
 		ReceivedAt:    received,
 		Source:        a.name,
 		SourceType:    event.SourceTSP,
 		Severity:      defaultSeverity,
 		Description:   fd.FaultDescription,
-		Tags: map[string]string{
-			TagSourceID: fd.ID,
-			TagVersion:  fd.Version,
-		},
-		Raw: fd.raw,
+		Tags:          map[string]string{TagSourceID: fd.ID},
+		Raw:           fd.raw,
+	}
+	set(e.Tags, TagVersion, fd.Version)
+	if hashed {
+		e.Tags[TagEventIDSource] = "hash"
 	}
 
 	if sev, ok := severityMap[fd.Severity]; ok {
 		e.Severity = sev
+	} else if fd.Severity == "" {
+		e.Tags[TagSeverityAbsent] = "true"
+		//tagged only when the lamps changed the outcome, so a derived severity
+		//is never mistaken for a reported one or for the plain default
+		if e.Severity = lampSeverity(fd); e.Severity != defaultSeverity {
+			e.Tags[TagSeverityDerived] = "lamp"
+		}
 	} else {
 		e.Tags[TagSeverityRaw] = fd.Severity
 	}
 
-	var unresolved []string
+	var unresolved, unknownSentinels []string
 	lookup := func(typeName string, r ref) (Entity, bool) {
 		if r.ID == "" {
+			return Entity{}, false
+		}
+		//the per site policy for sentinels, in one place. none of them is
+		//unresolved, because none of them was ever going to resolve.
+		property := strings.ToLower(typeName[:1]) + typeName[1:]
+		switch sentinelAt(typeName, r.ID) {
+		case sentinelNone:
+			return Entity{}, false
+		case sentinelUnknown:
+			unknownSentinels = append(unknownSentinels, property+"="+r.ID)
+			fallthrough
+		case sentinelValue:
+			//it means something, so it is kept as itself where the site has a
+			//tag for that. a failure mode has none: its only tag is a code.
+			if typeName == typeController {
+				e.Tags[TagController] = r.ID
+			}
 			return Entity{}, false
 		}
 		ent, ok := resolved[typeName][r.ID]
 		if !ok {
 			//named as FaultData spells the property, not as the entity type
-			unresolved = append(unresolved, strings.ToLower(typeName[:1])+typeName[1:])
+			unresolved = append(unresolved, property)
 		}
 		return ent, ok
 	}
@@ -374,7 +479,8 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 	//SPN comes from the diagnostic, and only when the diagnostic is one. a code
 	//from another numbering scheme in spn would be a wrong answer, which is
 	//worse than none.
-	if d, ok := lookup(typeDiagnostic, fd.Diagnostic); ok && d.Code != nil {
+	d, ok := lookup(typeDiagnostic, fd.Diagnostic)
+	if ok && d.Code != nil {
 		if d.Kind == diagnosticSPN {
 			spn := *d.Code
 			e.SPN = &spn
@@ -382,6 +488,11 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 			e.Tags[TagDiagnosticCode] = strconv.Itoa(*d.Code)
 			e.Tags[TagDiagnosticType] = d.Kind
 		}
+	}
+	if standard, known := diagnosticStandards[d.Source]; known {
+		e.Tags[TagDiagnosticStandard] = standard
+	} else {
+		set(e.Tags, TagDiagnosticStandard, d.Source)
 	}
 	//FMI comes from the failure mode. a code outside 0-31 is not an FMI, so it
 	//is tagged rather than allowed to fail the whole record.
@@ -414,6 +525,10 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 	if len(unresolved) > 0 {
 		sort.Strings(unresolved)
 		e.Tags[TagUnresolved] = strings.Join(unresolved, ",")
+	}
+	if len(unknownSentinels) > 0 {
+		sort.Strings(unknownSentinels)
+		e.Tags[TagSentinelUnknown] = strings.Join(unknownSentinels, ",")
 	}
 
 	if fd.Count != nil {

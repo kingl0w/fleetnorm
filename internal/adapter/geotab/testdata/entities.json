@@ -56,92 +56,223 @@
     "b0008": {
       "id": "b0008",
       "name": "unit-0008"
+    },
+    "b1C": {
+      "id": "b1C",
+      "name": "unit-go-0001",
+      "vehicleIdentificationNumber": "FLEETNORMFAKE9001"
     }
   },
   "Diagnostic": {
-    "DiagnosticObdP0420": {
-      "id": "DiagnosticObdP0420",
-      "name": "Catalyst System Efficiency Below Threshold",
-      "code": 420,
-      "diagnosticType": "ObdFault"
-    },
-    "DiagnosticProprietary8801": {
-      "id": "DiagnosticProprietary8801",
-      "name": "Vendor specific body controller fault",
-      "code": 8801,
-      "diagnosticType": "ProprietaryFault"
-    },
     "DiagnosticSpn100": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 100,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn100",
       "name": "Engine Oil Pressure",
-      "code": 100,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn102": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 102,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn102",
       "name": "Engine Intake Manifold #1 Pressure",
-      "code": 102,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn110": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 110,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn110",
       "name": "Engine Coolant Temperature",
-      "code": 110,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn157": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 157,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn157",
       "name": "Engine Injector Metering Rail #1 Pressure",
-      "code": 157,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn1761": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 1761,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn1761",
       "name": "Aftertreatment 1 Diesel Exhaust Fluid Tank Volume",
-      "code": 1761,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn190": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 190,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn190",
       "name": "Engine Speed",
-      "code": 190,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn3216": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 3216,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn3216",
       "name": "Aftertreatment 1 Intake NOx",
-      "code": 3216,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn3226": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 3226,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn3226",
       "name": "Aftertreatment 1 Outlet NOx",
-      "code": 3226,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn3251": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 3251,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn3251",
       "name": "Aftertreatment 1 DPF Differential Pressure",
-      "code": 3251,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn5246": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 5246,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn5246",
       "name": "Aftertreatment SCR Operator Inducement Severity",
-      "code": 5246,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn639": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 639,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn639",
       "name": "J1939 Network #1",
-      "code": 639,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
     },
     "DiagnosticSpn84": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "code": 84,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
       "id": "DiagnosticSpn84",
       "name": "Wheel-Based Vehicle Speed",
-      "code": 84,
-      "diagnosticType": "SuspectParameterNumber"
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId"
+    },
+    "aAN6X-WwiwkGcywinKbpt3w": {
+      "code": 151,
+      "controller": {
+        "id": "ControllerAnyId"
+      },
+      "diagnosticType": "Sid",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
+      "id": "aAN6X-WwiwkGcywinKbpt3w",
+      "name": "System diagnostic code #1",
+      "source": "SourceJ1708Id",
+      "unitOfMeasure": "UnitOfMeasureNoneId",
+      "validLoggingPeriod": "None",
+      "isLogGuaranteedOnEstimateError": false,
+      "version": "00000000000001a1"
+    },
+    "aEnI-29ZA-E2gPcMfvf0XYQ": {
+      "code": 36,
+      "controller": {
+        "id": "ControllerObdBodyId"
+      },
+      "diagnosticType": "ObdFault",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
+      "id": "aEnI-29ZA-E2gPcMfvf0XYQ",
+      "name": "ISO/SAE reserved",
+      "source": "SourceObdId",
+      "unitOfMeasure": "UnitOfMeasureNoneId",
+      "validLoggingPeriod": "None",
+      "isLogGuaranteedOnEstimateError": false,
+      "version": "00000000000060ce"
+    },
+    "aiDN8IHDf7EGdVvd5LDg3gg": {
+      "parameterGroup": "ParameterGroupNoneId",
+      "conversion": 2000,
+      "dataLength": 1,
+      "offset": 0,
+      "code": 16,
+      "controller": "ControllerNoneId",
+      "diagnosticType": "SuspectParameter",
+      "engineType": "EngineTypeGenericId",
+      "faultResetMode": "None",
+      "id": "aiDN8IHDf7EGdVvd5LDg3gg",
+      "name": "Engine fuel filter differential pressure (see also SPN 1382)",
+      "source": "SourceJ1939Id",
+      "unitOfMeasure": "UnitOfMeasurePascalsId",
+      "validLoggingPeriod": "None",
+      "isLogGuaranteedOnEstimateError": false,
+      "version": "0000000000000eb9"
+    },
+    "aysJxXoc3v0-Y6PGVSjoOxA": {
+      "engineType": "EngineTypeNoneId",
+      "code": 466,
+      "controller": {
+        "id": "ControllerGoDeviceId"
+      },
+      "diagnosticType": "GoFault",
+      "faultResetMode": "AutoReset",
+      "id": "aysJxXoc3v0-Y6PGVSjoOxA",
+      "name": "Fault - engine hours stale",
+      "source": "SourceGeotabGoId",
+      "unitOfMeasure": "UnitOfMeasureNoneId",
+      "validLoggingPeriod": "None",
+      "isLogGuaranteedOnEstimateError": false,
+      "version": "0000000000009938"
     }
   },
   "FailureMode": {

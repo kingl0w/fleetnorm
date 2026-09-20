@@ -226,7 +226,7 @@ func (c *client) resolve(ctx context.Context, typeName string, ids []string) (ma
 			if r.ID == "" {
 				continue
 			}
-			out[r.ID] = Entity{Name: r.Name, VIN: r.VIN, Code: r.Code, Kind: r.DiagnosticType}
+			out[r.ID] = Entity{Name: r.Name, VIN: r.VIN, Code: r.Code, Kind: r.DiagnosticType, Source: r.Source.ID}
 		}
 	}
 	return out, nil
@@ -240,6 +240,7 @@ type rawEntity struct {
 	VIN            string `json:"vehicleIdentificationNumber"`
 	Code           *int   `json:"code"`
 	DiagnosticType string `json:"diagnosticType"`
+	Source         ref    `json:"source"` //Diagnostic.source, a sentinel; seen as a bare string
 }
 
 // apiError is the MyGeotab error envelope. the nested name is what says whether

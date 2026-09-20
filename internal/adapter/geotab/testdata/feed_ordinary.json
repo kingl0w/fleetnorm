@@ -35,7 +35,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn639"
+        "id": "DiagnosticSpn1761"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -170,7 +170,7 @@
         "id": "b0001"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn102"
+        "id": "DiagnosticSpn110"
       },
       "failureMode": {
         "id": "FailureModeFmi4"
@@ -251,7 +251,7 @@
         "id": "b0002"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn3226"
+        "id": "DiagnosticSpn3251"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -305,7 +305,7 @@
         "id": "b0007"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn3226"
+        "id": "DiagnosticSpn3251"
       },
       "failureMode": {
         "id": "FailureModeFmi4"

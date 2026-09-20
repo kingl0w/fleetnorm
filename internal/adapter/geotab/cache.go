@@ -14,6 +14,10 @@ type Entity struct {
 	VIN  string //Device.vehicleIdentificationNumber
 	Code *int   //Diagnostic.code (an SPN when Kind says so), FailureMode.code
 	Kind string //Diagnostic.diagnosticType
+
+	//Diagnostic.source, one of Geotab's SourceXxxId sentinels. read for what it
+	//says and never resolved
+	Source string
 }
 
 // Resolver turns entity ids into resolved objects, one type at a time. an id

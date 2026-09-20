@@ -8,7 +8,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn157"
+        "id": "DiagnosticSpn190"
       },
       "failureMode": {
         "id": "FailureModeFmi16"
@@ -35,7 +35,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn157"
+        "id": "DiagnosticSpn190"
       },
       "failureMode": {
         "id": "FailureModeFmi16"
@@ -62,7 +62,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn157"
+        "id": "DiagnosticSpn190"
       },
       "failureMode": {
         "id": "FailureModeFmi16"
@@ -89,7 +89,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn157"
+        "id": "DiagnosticSpn190"
       },
       "failureMode": {
         "id": "FailureModeFmi16"
@@ -120,7 +120,7 @@
         "id": "b0003"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn1761"
+        "id": "DiagnosticSpn3216"
       },
       "failureMode": {
         "id": "FailureModeFmi16"
@@ -147,7 +147,7 @@
         "id": "b0003"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn1761"
+        "id": "DiagnosticSpn3216"
       },
       "failureMode": {
         "id": "FailureModeFmi16"

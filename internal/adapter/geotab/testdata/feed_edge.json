@@ -8,7 +8,7 @@
         "id": "b0002"
       },
       "diagnostic": {
-        "id": "DiagnosticObdP0420"
+        "id": "aEnI-29ZA-E2gPcMfvf0XYQ"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -23,7 +23,7 @@
       "malfunctionLamp": false,
       "protectWarningLamp": true,
       "faultLampState": "Amber",
-      "classCode": "Obd",
+      "classCode": "Ecm",
       "faultState": "Inactive",
       "sourceAddress": 248
     },
@@ -35,7 +35,7 @@
         "id": "b0007"
       },
       "diagnostic": {
-        "id": "DiagnosticProprietary8801"
+        "id": "aAN6X-WwiwkGcywinKbpt3w"
       },
       "failureMode": {
         "id": "FailureModeFmi4"
@@ -62,10 +62,10 @@
         "id": "b0005"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn100"
+        "id": "aysJxXoc3v0-Y6PGVSjoOxA"
       },
       "failureMode": {
-        "id": "FailureModeFmi254"
+        "id": "FailureModeFmi1"
       },
       "controller": {
         "id": "ControllerBrakesSystemController"
@@ -82,21 +82,36 @@
       "sourceAddress": 224
     },
     {
+      "amberWarningLamp": false,
+      "controller": {
+        "id": "ControllerGoDeviceId"
+      },
+      "count": 1,
+      "dateTime": "2026-08-31T09:31:22.054Z",
+      "device": {
+        "id": "b1C"
+      },
+      "diagnostic": {
+        "id": "aysJxXoc3v0-Y6PGVSjoOxA"
+      },
+      "failureMode": "NoFailureModeId",
+      "faultState": "Active",
+      "faultStates": {
+        "effectiveStatus": "FaultStatusActiveId"
+      },
+      "id": "b1",
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "redStopLamp": false
+    },
+    {
       "id": "a041360827",
       "version": "0000000000000119",
       "dateTime": "2026-09-14T16:57:00.000Z",
-      "device": {
-        "id": "b0002"
-      },
-      "diagnostic": {
-        "id": "DiagnosticSpnMissingFromReferenceSet"
-      },
-      "failureMode": {
-        "id": "FailureModeFmi31"
-      },
-      "controller": {
-        "id": "ControllerAftertreatment1"
-      },
+      "device": "b0002",
+      "diagnostic": "aiDN8IHDf7EGdVvd5LDg3gg",
+      "failureMode": "NoFailureModeId",
+      "controller": "ControllerNoneId",
       "count": 5,
       "severity": "Critical",
       "amberWarningLamp": false,
@@ -113,7 +128,7 @@
       "version": "000000000000011A",
       "dateTime": "2026-09-14T17:17:00.000Z",
       "device": {
-        "id": "b0008"
+        "id": "b0004"
       },
       "diagnostic": {
         "id": "DiagnosticSpn157"
@@ -122,7 +137,7 @@
         "id": "FailureModeFmi16"
       },
       "controller": {
-        "id": "ControllerEngine1"
+        "id": "ControllerNotSeenBeforeId"
       },
       "count": 19,
       "severity": "Critical",
@@ -152,19 +167,14 @@
         "id": "ControllerBrakesSystemController"
       },
       "count": 18,
-      "severity": "Critical",
       "amberWarningLamp": false,
-      "redStopLamp": true,
+      "redStopLamp": false,
       "malfunctionLamp": false,
       "protectWarningLamp": false,
       "faultLampState": "Protect",
       "classCode": "Proprietary",
       "faultState": "Active",
-      "sourceAddress": 84,
-      "faultDescription": "Aftertreatment 1 SCR intake NOx sensor: data drifted high",
-      "effectOnComponent": "Reduced engine performance and possible derate",
-      "recommendation": "Schedule service within 50 hours",
-      "riskOfBreakdown": 0.42
+      "sourceAddress": 84
     },
     {
       "id": "a873577040",
@@ -174,7 +184,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn110"
+        "id": "DiagnosticSpn157"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -183,9 +193,8 @@
         "id": "ControllerBrakesSystemController"
       },
       "count": 15,
-      "severity": "None",
       "amberWarningLamp": false,
-      "redStopLamp": false,
+      "redStopLamp": true,
       "malfunctionLamp": false,
       "protectWarningLamp": true,
       "faultLampState": "None",
@@ -204,13 +213,13 @@
         "id": "DiagnosticSpn157"
       },
       "failureMode": {
-        "id": "FailureModeFmi18"
+        "id": "FailureModeFmi254"
       },
       "controller": {
         "id": "ControllerTransmission1"
       },
       "count": 2,
-      "severity": "CatastrophicallyBad",
+      "severity": "Warning",
       "amberWarningLamp": true,
       "redStopLamp": false,
       "malfunctionLamp": true,
@@ -228,7 +237,7 @@
         "id": "b0005"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn190"
+        "id": "DiagnosticSpnMissingFromReferenceSet"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -239,10 +248,10 @@
       "count": 2,
       "severity": "Warning",
       "amberWarningLamp": false,
-      "redStopLamp": false,
-      "malfunctionLamp": false,
+      "redStopLamp": true,
+      "malfunctionLamp": true,
       "protectWarningLamp": false,
-      "faultLampState": "Red",
+      "faultLampState": "Amber",
       "classCode": "Obd",
       "faultState": "Pending",
       "sourceAddress": 137
@@ -252,10 +261,10 @@
       "version": "000000000000011F",
       "dateTime": "2026-09-14T18:46:00.000Z",
       "device": {
-        "id": "b0003"
+        "id": "b0008"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn639"
+        "id": "DiagnosticSpn1761"
       },
       "failureMode": {
         "id": "FailureModeFmi18"
@@ -267,7 +276,7 @@
       "severity": "Critical",
       "amberWarningLamp": true,
       "redStopLamp": true,
-      "malfunctionLamp": true,
+      "malfunctionLamp": false,
       "protectWarningLamp": true,
       "faultLampState": "Amber",
       "classCode": "Proprietary",
@@ -282,7 +291,7 @@
         "id": "b0008"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn639"
+        "id": "DiagnosticSpn1761"
       },
       "failureMode": {
         "id": "FailureModeFmi5"
@@ -292,14 +301,18 @@
       },
       "count": 8,
       "severity": "Warning",
-      "amberWarningLamp": true,
+      "amberWarningLamp": false,
       "redStopLamp": false,
-      "malfunctionLamp": false,
+      "malfunctionLamp": true,
       "protectWarningLamp": true,
-      "faultLampState": "Protect",
+      "faultLampState": "Red",
       "classCode": "Proprietary",
       "faultState": "Pending",
-      "sourceAddress": 158
+      "sourceAddress": 158,
+      "faultDescription": "Aftertreatment 1 SCR intake NOx sensor: data drifted high",
+      "effectOnComponent": "Reduced engine performance and possible derate",
+      "recommendation": "Schedule service within 50 hours",
+      "riskOfBreakdown": 0.42
     },
     {
       "id": "a276436847",
@@ -309,7 +322,7 @@
         "id": "b0004"
       },
       "diagnostic": {
-        "id": "DiagnosticSpn639"
+        "id": "DiagnosticSpn1761"
       },
       "failureMode": {
         "id": "FailureModeFmi1"
@@ -319,10 +332,145 @@
       },
       "count": 19,
       "severity": "None",
+      "amberWarningLamp": false,
+      "redStopLamp": false,
+      "malfunctionLamp": true,
+      "protectWarningLamp": false,
+      "faultLampState": "Protect",
       "classCode": "Proprietary",
       "faultState": "Inactive",
       "sourceAddress": 9
+    },
+    {
+      "id": "a380233895",
+      "version": "0000000000000122",
+      "dateTime": "2026-09-14T20:09:00.000Z",
+      "device": {
+        "id": "b0008"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn100"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi0"
+      },
+      "controller": {
+        "id": "ControllerBrakesSystemController"
+      },
+      "count": 16,
+      "severity": "CatastrophicallyBad",
+      "amberWarningLamp": false,
+      "redStopLamp": false,
+      "malfunctionLamp": true,
+      "protectWarningLamp": true,
+      "faultLampState": "Protect",
+      "classCode": "Obd",
+      "faultState": "Inactive",
+      "sourceAddress": 182
+    },
+    {
+      "id": "a599890478",
+      "version": "0000000000000123",
+      "dateTime": "2026-09-14T20:47:00.000Z",
+      "device": {
+        "id": "b0001"
+      },
+      "diagnostic": {
+        "id": "aiDN8IHDf7EGdVvd5LDg3gg"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi2"
+      },
+      "controller": {
+        "id": "ControllerAftertreatment1"
+      },
+      "count": 11,
+      "severity": "Unknown",
+      "amberWarningLamp": false,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": false,
+      "faultLampState": "Red",
+      "classCode": "Ecm",
+      "faultState": "Inactive",
+      "sourceAddress": 212
+    },
+    {
+      "id": "a775190921",
+      "version": "0000000000000124",
+      "dateTime": "2026-09-14T21:11:00.000Z",
+      "device": {
+        "id": "b0004"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn84"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi2"
+      },
+      "controller": {
+        "id": "ControllerEngine1"
+      },
+      "count": 9,
+      "severity": "Critical",
+      "amberWarningLamp": true,
+      "redStopLamp": true,
+      "malfunctionLamp": true,
+      "protectWarningLamp": true,
+      "faultLampState": "Amber",
+      "classCode": "Obd",
+      "faultState": "Inactive",
+      "sourceAddress": 73
+    },
+    {
+      "id": "a756574285",
+      "version": "0000000000000125",
+      "dateTime": "2026-09-14T21:26:00.000Z",
+      "device": {
+        "id": "b0006"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn190"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi0"
+      },
+      "controller": {
+        "id": "ControllerEngine1"
+      },
+      "count": 3,
+      "severity": "Warning",
+      "amberWarningLamp": true,
+      "redStopLamp": false,
+      "malfunctionLamp": false,
+      "protectWarningLamp": true,
+      "faultLampState": "Protect",
+      "classCode": "Ecm",
+      "faultState": "Active",
+      "sourceAddress": 171
+    },
+    {
+      "id": "a031536911",
+      "version": "0000000000000126",
+      "dateTime": "2026-09-14T21:56:00.000Z",
+      "device": {
+        "id": "b0001"
+      },
+      "diagnostic": {
+        "id": "DiagnosticSpn157"
+      },
+      "failureMode": {
+        "id": "FailureModeFmi31"
+      },
+      "controller": {
+        "id": "ControllerEngine1"
+      },
+      "count": 6,
+      "severity": "None",
+      "classCode": "Proprietary",
+      "faultState": "Inactive",
+      "sourceAddress": 106
     }
   ],
-  "toVersion": "0000000000000122"
+  "toVersion": "0000000000000127"
 }

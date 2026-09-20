@@ -217,7 +217,9 @@ func TestFixtureEdgeFeed(t *testing.T) {
 	var (
 		nonSPN, outOfRangeFMI, unresolved, vinFallback bool
 		enriched, bare, oddSeverity, noLamps           bool
+		noSeverity, unknownSentinel, captured, derived bool
 	)
+	standards := map[string]bool{}
 	for _, e := range events {
 		switch {
 		case e.Tags[TagDiagnosticCode] != "" && e.Tags[TagDiagnosticType] != "":
@@ -225,6 +227,30 @@ func TestFixtureEdgeFeed(t *testing.T) {
 			if e.SPN != nil {
 				t.Errorf("%s put a %s code in spn", e.EventID, e.Tags[TagDiagnosticType])
 			}
+		}
+		if s := e.Tags[TagDiagnosticStandard]; s != "" {
+			standards[s] = true
+		}
+		if e.Tags[TagSeverityAbsent] == "true" {
+			want := defaultSeverity
+			if e.Tags[TagSeverityDerived] == "lamp" {
+				derived = true
+				want = event.SeverityCritical
+				if e.Tags[TagRedStopLamp] != "true" {
+					t.Errorf("%s derived a severity without a red stop lamp", e.EventID)
+				}
+			} else {
+				noSeverity = true
+			}
+			if e.Severity != want {
+				t.Errorf("%s severity = %q, want %q", e.EventID, e.Severity, want)
+			}
+		}
+		if e.Tags[TagSentinelUnknown] != "" {
+			unknownSentinel = true
+		}
+		if e.Tags[TagSourceID] == "b1" && e.Tags[TagVersion] == "" {
+			captured = true
 		}
 		if e.Tags[TagFailureModeCode] != "" {
 			outOfRangeFMI = true
@@ -276,6 +302,14 @@ func TestFixtureEdgeFeed(t *testing.T) {
 		"a bare fault":                    bare,
 		"an unrecognized severity":        oddSeverity,
 		"a fault with no lamp fields":     noLamps,
+		"a fault with no severity":        noSeverity,
+		"a severity raised by a lamp":     derived,
+		"an unknown sentinel":             unknownSentinel,
+		"the captured GoFault record":     captured,
+		"a j1939 diagnostic":              standards["j1939"],
+		"a j1708 diagnostic":              standards["j1708"],
+		"an obd diagnostic":               standards["obd"],
+		"a device diagnostic":             standards["device"],
 	} {
 		if !covered {
 			t.Errorf("the edge scene no longer covers %s", name)
