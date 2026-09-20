@@ -18,6 +18,38 @@ on every event as `schema_version` and its stability promise lives in
   `cmd/genfixtures`. Deterministic at a fixed seed, and a test fails if the
   committed fixtures drift from the generator. The fixtures are synthetic and
   contain no real fleet data.
+- **`geotab.diagnostic_standard`**, derived from the resolved diagnostic's
+  `source`: `j1939`, `j1708`, `obd`, `device`, or the raw value. A J1708 `Sid` is
+  no longer indistinguishable from an OBD code.
+- `geotab.severity_absent`, `geotab.severity_derived`, `geotab.sentinel_unknown`
+  and `geotab.event_id_source` tags.
+- **An absent Geotab `severity` can be raised by the lamps, never lowered.** The
+  red stop lamp makes it `critical`, tagged `geotab.severity_derived=lamp`.
+
+### Fixed
+
+All found by running the Geotab adapter's assumptions against a live MyGeotab
+database; none of it is in the entity reference. See
+[docs/adapters.md](docs/adapters.md).
+
+- **J1939 faults never got an `spn`.** The type guard compared against
+  `SuspectParameterNumber`; the value is `SuspectParameter`. Every real SPN was
+  silently routed to `geotab.diagnostic_code`.
+- **References arrive as a bare string or an object.** A bare string failed the
+  decode and skipped the record, which with a live feed is every record.
+- **Sentinels such as `NoFailureModeId` are never sent to an enrichment `Get`**,
+  and no longer show up as `geotab.unresolved`.
+- **A record with no `severity`** gets a documented `medium` rather than an
+  accidental one, and no longer writes an empty `geotab.severity_raw`.
+- **A record with no `version` is no longer skipped.** The version is still the
+  primary path; without one the `event_id` revision is a hash of the record and
+  `geotab.event_id_source` is `hash`. Whether `GetFeed` sends a version on
+  FaultData is unverified, and docs/adapters.md says what follows if it does not.
+
+### Changed
+
+- The Geotab fixtures resolve against Diagnostic records captured from a live
+  database, and the edge feed carries a captured FaultData record verbatim.
 
 ## [0.1.0] - 2026-09-18
 

@@ -196,8 +196,15 @@ owner wrote, so it follows the contract above rather than the file adapter's
 strict default: one unusable record is skipped and audited, and the feed keeps
 moving.
 
-Four things about Geotab's model do not line up with ours, and each one is a
+Several things about Geotab's model do not line up with ours, and each one is a
 decision recorded here rather than a surprise in the code.
+
+Several of the behaviors below are marked **observed**. They were found by
+pointing the adapter at a live MyGeotab demo database, and the entity reference
+does not describe them: it documents the fields, not these shapes. Where the two
+disagree this adapter follows what the server sent, and the captured records
+that showed it are kept verbatim in `internal/adapter/geotab/fixtures` so a test
+holds each one in place.
 
 ### event_id carries the version
 
@@ -224,6 +231,35 @@ event, in two tags:
 
 A consumer that wants the latest state of one fault groups by
 `geotab.source_id` and takes the highest `geotab.version`.
+
+#### The hash fallback, and what is not yet known
+
+The version is the designed path and stays the primary one. There is a fallback
+for a record that has none:
+
+| Record | `event_id` | Tags |
+| --- | --- | --- |
+| `version` present | `<id>:<version>` | `geotab.version` set |
+| `version` absent | `<id>:<first 16 hex of sha256(raw)>` | `geotab.version` omitted, `geotab.event_id_source` = `hash` |
+
+The hash keeps the property the version was there for. A revision that changed
+anything hashes differently and survives dedupe; a verbatim resend hashes the
+same and is swallowed. With no version to order by, the revisions of one
+`geotab.source_id` order by `occurred_at`.
+
+**Why it exists, and the open question.** A FaultData record fetched from a live
+database with `Get` had no `version`, and the adapter as first written skipped
+any record without one, which would have been every record. But that sample came
+from `Get`, not `GetFeed`. Absence is not universal either: Diagnostic records
+from the same database carry one (`"0000000000000eb9"`), and the feed's whole
+contract is built on versions, so FaultData over `GetFeed` may well have it.
+**Whether `GetFeed` responses carry a `version` is unverified.**
+
+If it turns out the feed never sends one, every event takes the hash path and
+the version-in-`event_id` design above needs revisiting rather than patching:
+ordering by version, "take the highest `geotab.version`", and the open schema
+question below all assume it exists. `geotab.event_id_source` = `hash` on every
+event from a live feed is the signal that this has happened.
 
 There is an open schema question behind this, about whether a normalized event
 should be able to say "this supersedes that" as a first-class field rather than
@@ -291,18 +327,142 @@ of FaultData property names such as `diagnostic,device`. Absent is a fact the
 schema can represent. A dropped fault is not.
 
 One consequence worth naming: `spn` is set only when the diagnostic's
-`diagnosticType` is `SuspectParameterNumber`. Geotab diagnostics also cover
-OBD-II and proprietary fault codes, whose `code` is a number from a different
+`diagnosticType` is `SuspectParameter`. Geotab diagnostics also cover J1708,
+OBD-II and the GO device's own faults, whose `code` is a number from a different
 scheme. Putting one of those in `spn` would be a wrong answer, which is worse
 than a missing one, so those land in `geotab.diagnostic_code` and
 `geotab.diagnostic_type` instead. A `failureMode` code outside 0–31 is handled
 the same way, in `geotab.failure_mode_code`.
 
+**Observed: the constant is `SuspectParameter`.** This adapter first shipped
+comparing against `SuspectParameterNumber`, which no record carries. Nothing
+failed: every real J1939 fault simply missed the guard and went to
+`geotab.diagnostic_code` with no `spn`, which is the exact silent wrong answer
+the guard exists to prevent. `TestCapturedSuspectParameterMapsToSPN` runs a
+captured Diagnostic through the adapter so the constant cannot drift back. The
+types seen in one live database: `SuspectParameter`, `Sid`, `Pid`, `ObdFault`,
+`ObdWwhFault`, `GoFault`, `GoDiagnostic`, `DataDiagnostic`. Only the first is an
+SPN.
+
+### geotab.diagnostic_standard
+
+`diagnosticType` says what kind of code a diagnostic carries, but not which
+standard it belongs to, and that is the better question for "is this a vehicle
+fault or the device talking about itself". A `Sid` is a real vehicle fault on the
+older J1708 standard, and by type alone it is indistinguishable from an OBD code
+once it is in tags. The resolved diagnostic's `source` answers it:
+
+| Diagnostic `source` | `geotab.diagnostic_standard` |
+| --- | --- |
+| `SourceJ1939Id` | `j1939` |
+| `SourceJ1708Id` | `j1708` |
+| `SourceObdId` | `obd` |
+| `SourceGeotabGoId` | `device` |
+| anything else | the raw value, as it arrived |
+
+It is written on every event whose diagnostic resolved, SPN or not. It
+supplements the `spn` guard and does not replace it: `SourceJ1939Id` appears on
+`Sid` diagnostics as well as `SuspectParameter`, so a J1939 source does not make
+a code an SPN.
+
+### References arrive in two shapes
+
+**Observed.** An id reference is documented as an object with an `id`. A live
+server sends the same property, on the same entity type, either way:
+
+```json
+"controller": "ControllerNoneId"
+"controller": { "id": "ControllerObdBodyId" }
+```
+
+What was seen, per property:
+
+| Property | Shape seen |
+| --- | --- |
+| `FaultData.controller` | object |
+| `FaultData.failureMode` | bare string (`"NoFailureModeId"`) |
+| `FaultData.diagnostic`, `FaultData.device` | object |
+| `Diagnostic.controller` | both: a bare string on one record, an object on the next |
+| `Diagnostic.source` | bare string |
+
+One database is not proof that `device` never arrives as a string, so the
+adapter does not encode that table. Every reference it reads, `dismissUser` and
+`Diagnostic.source` included, decodes through one type that accepts a bare
+string, an object with an `id`, or `null`, and the rest of the code sees a single
+representation. Before this, a bare string failed the decode of the whole
+record: it was skipped as "not a FaultData object", and since every live record
+carries `failureMode` as a bare string, every one of them would have been
+skipped and the poll failed at the skip ceiling.
+
+Nothing is assumed about an id's length or format either. The same captured
+record carries `b1` and `b1C` next to `aysJxXoc3v0-Y6PGVSjoOxA`.
+
+### Sentinels
+
+**Observed.** Geotab does not say "none", "any" or "not a real object" with
+`null` or an absent property. It sends a string constant shaped like an id:
+
+- `NoFailureModeId`
+- `ControllerNoneId`, `ControllerGoDeviceId`, `ControllerAnyId`, `ControllerObdBodyId`
+- `EngineTypeNoneId`, `EngineTypeGenericId`
+- `UnitOfMeasureNoneId`, `ParameterGroupNoneId`
+- `FaultStatusActiveId`, inside `faultStates.effectiveStatus`
+- `SourceJ1939Id`, `SourceJ1708Id`, `SourceObdId`, `SourceGeotabGoId`, `SourceSystemId`
+
+That list is what one database showed and is not guaranteed complete, so the
+adapter recognizes the shape, a capitalized word ending in `Id`, as well as the
+list. Generated MyGeotab ids start with a lower case letter, so they never match
+it. One helper, `classify` in `sentinel.go`, sorts an id into an ordinary id, a
+known sentinel meaning *nothing here*, a known sentinel that *means something*,
+or an *unknown* sentinel.
+
+**A sentinel is never passed to an enrichment `Get`.** There is nothing behind
+`NoFailureModeId` or `ControllerGoDeviceId` to fetch: the lookup is an error or
+a meaningless answer, and either way it spends the 500/min budget. That rule
+holds everywhere. What a sentinel means beyond it is decided per site:
+
+| Site | Policy |
+| --- | --- |
+| `failureMode` | `NoFailureModeId` means no `fmi`, and nothing is tagged. Any other sentinel is never resolved and is listed in `geotab.sentinel_unknown`. |
+| `controller` | `ControllerNoneId` means no controller, and nothing is tagged. The other known ones are written to `geotab.controller` as themselves, since "the GO device" is an answer. An unknown one is too, and is also listed in `geotab.sentinel_unknown`. |
+| `Diagnostic.source` | Never a reference. Mapped to `geotab.diagnostic_standard`, raw when unlisted. |
+| `diagnostic`, `device` | Not sentinel sites, always resolved. See below: this is deliberate. |
+| `engineType`, `unitOfMeasure`, `parameterGroup`, `faultStates.effectiveStatus` | Not read by this adapter, so no policy. They reach consumers in `raw`. |
+
+**The `diagnostic` and `device` exemption is not an inconsistency to fix.** It
+looks like one: the shape rule keeps `ControllerNewId` away from `Get`, and yet a
+diagnostic id of exactly that shape is resolved. The reason is evidence. A `Get`
+on Diagnostic against the live demo database returned real, resolvable records
+with these ids:
+
+`DiagnosticIgnitionId`, `DiagnosticAux3Id`, `DiagnosticPositionValidId`,
+`DiagnosticEngineHoursStaleId`, `DiagnosticGpsAntennaUnpluggedId`,
+`DiagnosticDeviceHasBeenUnpluggedId`
+
+All sentinel-shaped, all real, and in the same entity type as opaque ids like
+`aysJxXoc3v0-Y6PGVSjoOxA`. For Diagnostic the shape says nothing about whether a
+record exists. Applying the sentinel rule there would refuse to resolve
+well-known diagnostics, and an unresolved diagnostic has no code: every such
+fault would lose its `spn` or `geotab.diagnostic_code`, silently, which is the
+failure this adapter has already had once.
+
+Whether real ids at `controller` and `failureMode` are also `XxxId`-shaped is
+unknown. Every live record seen had no failure mode. If they are, they will not
+be resolved, and `geotab.sentinel_unknown` is what will show it: a real
+controller turning up there is the prompt to revisit that site's policy.
+
+An unknown sentinel is handled conservatively: it is not resolved, it does not
+fail the record, and it is made visible in `geotab.sentinel_unknown` as
+`property=value` pairs, such as `controller=ControllerNewId`. A sentinel is never
+listed in `geotab.unresolved`, because that tag means a lookup was tried and
+failed, and none was.
+
 ### Severity
 
 Geotab's `severity` is already coalesced from five underlying properties in a
-documented precedence order, so this adapter maps that one field rather than
-inventing a second ranking from the lamps.
+documented precedence order, so when a record has one, this adapter maps that
+one field and the lamps are not consulted. When it has none, the lamps may raise
+the severity and never lower it; that rule is below.
 
 | Geotab `severity` | fleetnorm `severity` |
 | --- | --- |
@@ -311,16 +471,63 @@ inventing a second ranking from the lamps.
 | `None` | `info` |
 | `Unknown` | `medium` |
 | anything else | `medium`, plus `geotab.severity_raw` |
+| absent | `medium`, or `critical` when the red stop lamp is on; plus `geotab.severity_absent` |
 
 An unrecognized value maps up rather than down: it is not evidence the fault is
 minor. The original string is kept in `geotab.severity_raw` so nothing about the
 guess is hidden, and `raw` still has the record as it arrived.
 
+**Observed: live FaultData has no `severity` field at all.** Not `null`, absent,
+and on the records seen that was the rule rather than the exception. `severity`
+is required by our schema and `unknown` is not in its enum, so something has to
+be chosen, and it is chosen here rather than by a zero value: **`medium`**, with
+`geotab.severity_absent` set to `true`.
+
+The alternative was the lowest severity. The reasoning against it: because
+absent is the common case, the default is the severity most Geotab events will
+carry, and the two ways of being wrong are not the same size. Defaulting low
+makes a real engine fault that arrived without a severity look ignorable, and
+nothing downstream can tell that happened. Defaulting to `medium` over-reports
+GO device noise, but that error is visible and filterable: the event says
+`geotab.severity_absent`, and `geotab.diagnostic_standard` = `device` picks out
+the device's own faults. It is also the same rule as the row above, for the same
+reason: no information about severity is not information that it is low.
+
+`geotab.severity_absent` is what keeps a defaulted `medium` from being read as
+one Geotab reported. It is set in every absent case, whatever the lamps did.
+
+#### Lamps raise an absent severity, and never lower it
+
+Only when `severity` is absent:
+
+| Lamps | `severity` | `geotab.severity_derived` |
+| --- | --- | --- |
+| `redStopLamp` true | `critical` | `lamp` |
+| `amberWarningLamp`, `malfunctionLamp` or `protectWarningLamp` true | `medium` | not set |
+| all four false, or absent | `medium`, the default | not set |
+
+The rule moves in one direction. Raising on the red stop lamp is not a ranking
+this adapter invented: J1939 defines that lamp as "stop the vehicle now", so
+`critical` is the standard's meaning, not ours. What is declined is the
+downgrade. All four lamps false was the shape of every live record seen, on GO
+device faults where the lamps carry no information at all, so reading it as
+"minor" would treat the absence of a signal as evidence, and bury faults in the
+one severity nobody looks at.
+
+The middle row changes nothing against today's default. It is explicit in the
+code anyway, so the rule survives a change to the default.
+
+`geotab.severity_derived` = `lamp` is set only when the derivation changed the
+outcome, which today means the red stop lamp. That keeps a derived severity
+distinguishable from one Geotab reported and from the plain default. A record
+that has a `severity`, recognized or not, keeps its own mapping even with the
+red stop lamp on: the derivation does not fire and neither tag is set.
+
 ### Field mapping
 
 | Normalized | From |
 | --- | --- |
-| `event_id` | `<id>:<version>` |
+| `event_id` | `<id>:<version>`, or `<id>:<hash of the record>` when there is no version |
 | `occurred_at` | `dateTime`, converted to UTC |
 | `received_at` | the poll time |
 | `vin` | resolved device VIN, falling back to the device id |
@@ -330,7 +537,7 @@ guess is hidden, and `raw` still has the record as it arrived.
 | `spn` | resolved diagnostic code, when it is an SPN |
 | `fmi` | resolved failure mode code, when it is 0–31 |
 | `occurrence_count` | `count` |
-| `severity` | mapped from `severity`, see above |
+| `severity` | mapped from `severity`; when absent, the default raised by the lamps, see above |
 | `lamp_status` | `faultLampState`, when present |
 | `description` | `faultDescription`, when present |
 | `raw` | the FaultData JSON verbatim, before enrichment |
@@ -356,16 +563,20 @@ empty string.
 | Tag | Meaning |
 | --- | --- |
 | `geotab.source_id` | the Geotab record id, stable across revisions |
-| `geotab.version` | the version of this revision |
+| `geotab.version` | the version of this revision, when the record has one |
+| `geotab.event_id_source` | `hash` when the record had no version and `event_id` carries a hash of it instead |
 | `geotab.unresolved` | comma separated references that could not be resolved |
+| `geotab.sentinel_unknown` | comma separated `property=value` for sentinels not in the known list |
 | `geotab.severity_raw` | the original `severity` when it was unrecognized |
+| `geotab.severity_absent` | `true` when the record had no `severity` |
+| `geotab.severity_derived` | `lamp` when an absent severity was raised by the red stop lamp |
 | `geotab.vin_fallback` | `device_id` when `vin` holds a device id, not a VIN |
 | `geotab.amber_warning_lamp` | `amberWarningLamp` |
 | `geotab.red_stop_lamp` | `redStopLamp` |
 | `geotab.malfunction_lamp` | `malfunctionLamp` |
 | `geotab.protect_warning_lamp` | `protectWarningLamp` |
 | `geotab.fault_lamp_state` | `faultLampState` |
-| `geotab.controller` | resolved controller name |
+| `geotab.controller` | resolved controller name, or the sentinel itself, such as `ControllerGoDeviceId` |
 | `geotab.class_code` | `classCode` |
 | `geotab.fault_state` | `faultState` |
 | `geotab.source_address` | `sourceAddress` |
@@ -373,6 +584,7 @@ empty string.
 | `geotab.dismiss_user` | the dismissing user's id |
 | `geotab.diagnostic_code` | diagnostic code that is not an SPN |
 | `geotab.diagnostic_type` | the diagnostic type that code belongs to |
+| `geotab.diagnostic_standard` | `j1939`, `j1708`, `obd`, `device`, or the raw diagnostic `source` |
 | `geotab.failure_mode_code` | failure mode code outside the 0–31 FMI range |
 | `geotab.effect_on_component` | `effectOnComponent`, enriched faults only |
 | `geotab.recommendation` | `recommendation`, enriched faults only |
@@ -392,11 +604,23 @@ hand:
 make fixtures      # go run ./cmd/genfixtures
 ```
 
-**None of it is real.** The VINs are impossible rather than merely unassigned,
-since every one contains a letter a real VIN cannot; device names are
-`unit-0001`; and no part of it came from a fleet. The SPNs are a short
-hand-written table of well-known J1939 numbers with their meanings in a comment,
-not a dictionary. SAE sells the digital annex and this does not reproduce it.
+**None of it comes from a fleet.** The VINs are impossible rather than merely
+unassigned, since every one contains a letter a real VIN cannot, and device
+names are `unit-0001`. The SPNs are a short hand-written table of well-known
+J1939 numbers with their meanings in a comment, not a dictionary. SAE sells the
+digital annex and this does not reproduce it.
+
+**The reference shapes are real.** Four Diagnostic records, a
+`SuspectParameter`, an `ObdFault`, a `Sid` and a `GoFault`, and the one FaultData
+record that referenced the `GoFault`, were captured from a live MyGeotab demo
+database and are in the generator verbatim. They are system reference data and a
+device health fault from a demo database, not anything about a vehicle. The
+non-SPN diagnostics the edge scene resolves against are those records rather
+than invented ones, and the captured FaultData record is in the edge feed byte
+for byte. The J1939 faults themselves are still synthetic, because the demo
+database only emits GO device health faults and the `spn` path needs events, but
+the synthetic SPN diagnostics are now built in the captured one's shape,
+sentinels and bare string `controller` included.
 
 The generator is deterministic. The same `-seed` produces byte-identical files,
 which is what lets `TestFixturesAreGenerated` regenerate at the committed seed
@@ -412,7 +636,7 @@ handed to the test double as-is:
 | `entities.json` | the reference set enrichment resolves against, by type and id |
 | `feed_ordinary.json` | faults where everything resolves |
 | `feed_revisions.json` | one id at several versions, an incrementing count, a dismissal |
-| `feed_edge.json` | a non-SPN diagnostic, an FMI outside 0–31, an unresolved reference, a device with no VIN, enriched and bare faults, lamp combinations, an unrecognized severity |
+| `feed_edge.json` | the captured `ObdFault`, `Sid` and `GoFault` diagnostics, the captured FaultData record, bare string references, known and unknown sentinels, an FMI outside 0–31, an unresolved reference, a device with no VIN, enriched and bare faults, lamp combinations, an unrecognized severity, an absent severity with the lamps off and with the red stop lamp on |
 | `feed_skip.json` | records that fail validation, staying under the skip ceiling |
 | `feed_ceiling.json` | enough failures to trip the ceiling |
 
