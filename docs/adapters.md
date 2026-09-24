@@ -232,34 +232,61 @@ event, in two tags:
 A consumer that wants the latest state of one fault groups by
 `geotab.source_id` and takes the highest `geotab.version`.
 
-#### The hash fallback, and what is not yet known
+#### FaultData has no per-record version, so the revision is a content hash
 
-The version is the designed path and stays the primary one. There is a fallback
-for a record that has none:
+**Observed, and verified over `GetFeed`.** Everything above was written from the
+API's description of the feed. Against a live demo database, the `FeedResult`
+carries `toVersion`, which is the cursor, but the individual FaultData records
+carry no `version` field at all. The record shape is otherwise byte-identical
+between `Get` and `GetFeed`. So for FaultData the hash is the normal case, not
+the exception, and an event with `geotab.version` is the one to be surprised by.
 
 | Record | `event_id` | Tags |
 | --- | --- | --- |
+| `version` absent, the normal case | `<id>:<first 16 hex of sha256(canonical record)>` | `geotab.version` omitted, `geotab.event_id_source` = `hash` |
 | `version` present | `<id>:<version>` | `geotab.version` set |
-| `version` absent | `<id>:<first 16 hex of sha256(raw)>` | `geotab.version` omitted, `geotab.event_id_source` = `hash` |
 
-The hash keeps the property the version was there for. A revision that changed
-anything hashes differently and survives dedupe; a verbatim resend hashes the
-same and is swallowed. With no version to order by, the revisions of one
-`geotab.source_id` order by `occurred_at`.
+The hash keeps the property the version was meant to provide. A revision that
+changed anything hashes differently and survives dedupe; a resend that says the
+same thing hashes the same and is swallowed. A consumer that wants the latest
+state of one fault groups by `geotab.source_id` and orders by `occurred_at` and
+then `received_at`; "take the highest `geotab.version`" applies only to events
+that have one.
 
-**Why it exists, and the open question.** A FaultData record fetched from a live
-database with `Get` had no `version`, and the adapter as first written skipped
-any record without one, which would have been every record. But that sample came
-from `Get`, not `GetFeed`. Absence is not universal either: Diagnostic records
-from the same database carry one (`"0000000000000eb9"`), and the feed's whole
-contract is built on versions, so FaultData over `GetFeed` may well have it.
-**Whether `GetFeed` responses carry a `version` is unverified.**
+**The version path stays, and is not dead code.** Other entity types do carry a
+version, Diagnostic records from the same database among them
+(`"0000000000000eb9"`), and one demo database does not prove what a production
+FaultData feed sends. When a record has a `version`, it wins, the hash is not
+computed, and the first half of this section applies as written. The adapter as
+first written did the opposite and skipped any record without one, which against
+a live feed is every record.
 
-If it turns out the feed never sends one, every event takes the hash path and
-the version-in-`event_id` design above needs revisiting rather than patching:
-ordering by version, "take the highest `geotab.version`", and the open schema
-question below all assume it exists. `geotab.event_id_source` = `hash` on every
-event from a live feed is the signal that this has happened.
+**The hash is of a canonical form, not of the bytes received.** Hashing `raw`
+directly would make JSON key order part of the id. Geotab's serializer is
+consistent today, but nothing guarantees that across server versions or
+instances, and a European server need not agree with a North American one. If
+the order ever shifted, every event already delivered would hash differently and
+fire again as new. So the record is decoded and re-encoded with its keys sorted
+and its whitespace dropped, and that is what is hashed: the id depends on
+content, not formatting. Numbers are compared by value, so `2` and `2.0` are the
+same content. Canonicalization is for the hash only. `raw` on the event is
+always the record verbatim, as it arrived.
+
+**Known limitation: an identical reactivation is deduped.** A fault that goes
+active, clears, and reactivates with every field identical to the first time,
+`dateTime` included, is the same content, hashes to the same `event_id`, and is
+swallowed as a repeat. `dateTime` should advance on a reactivation, and `count`
+usually will, so this is almost certainly unreachable in practice. It is a real
+property of identifying a revision by its content rather than by a counter, and
+it is written here so that it is a known limit and not a surprise.
+
+**What the demo database cannot tell us.** It held 39 faults with `toVersion` at
+5. That is no evidence about behavior at volume, and no modified record has been
+observed being resent: nothing was dismissed and no `count` incremented while
+anyone was watching. That `GetFeed` resends a FaultData record when it changes,
+which is the premise of this whole section, remains theory. If it turns out the
+feed never resends, the revision part of `event_id` is harmless but idle; if it
+resends in some other shape, such as a new `id`, this section needs revisiting.
 
 There is an open schema question behind this, about whether a normalized event
 should be able to say "this supersedes that" as a first-class field rather than
@@ -527,7 +554,7 @@ red stop lamp on: the derivation does not fire and neither tag is set.
 
 | Normalized | From |
 | --- | --- |
-| `event_id` | `<id>:<version>`, or `<id>:<hash of the record>` when there is no version |
+| `event_id` | `<id>:<hash of the canonical record>`, or `<id>:<version>` when the record has one |
 | `occurred_at` | `dateTime`, converted to UTC |
 | `received_at` | the poll time |
 | `vin` | resolved device VIN, falling back to the device id |
@@ -563,8 +590,8 @@ empty string.
 | Tag | Meaning |
 | --- | --- |
 | `geotab.source_id` | the Geotab record id, stable across revisions |
-| `geotab.version` | the version of this revision, when the record has one |
-| `geotab.event_id_source` | `hash` when the record had no version and `event_id` carries a hash of it instead |
+| `geotab.version` | the version of this revision, when the record has one; live FaultData has none |
+| `geotab.event_id_source` | `hash` when `event_id` carries a content hash, which is the normal case for FaultData |
 | `geotab.unresolved` | comma separated references that could not be resolved |
 | `geotab.sentinel_unknown` | comma separated `property=value` for sentinels not in the known list |
 | `geotab.severity_raw` | the original `severity` when it was unrecognized |

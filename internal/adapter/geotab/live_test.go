@@ -1,6 +1,7 @@
 package geotab
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -402,6 +403,39 @@ func TestVersionlessRevisionsStayDistinct(t *testing.T) {
 }
 
 // poll1 polls a feed that holds exactly one usable record.
+// the id depends on what a record says and not on how it was serialized: key
+// order and whitespace are not content, a changed value is. and raw is never
+// the canonical form, only ever what arrived.
+func TestHashIgnoresKeyOrderAndFormatting(t *testing.T) {
+	const (
+		original  = `{"id":"h","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"count":1,"faultStates":{"effectiveStatus":"FaultStatusActiveId","x":2},"redStopLamp":false}`
+		reordered = `{ "redStopLamp": false, "faultStates": {"x": 2.0, "effectiveStatus": "FaultStatusActiveId"},
+			"count": 1, "device": {"id": "b1"}, "dateTime": "2026-09-14T08:40:00Z", "id": "h" }`
+		changed = `{"id":"h","dateTime":"2026-09-14T08:40:00Z","device":{"id":"b1"},"count":2,"faultStates":{"effectiveStatus":"FaultStatusActiveId","x":2},"redStopLamp":false}`
+	)
+	_, a := capturedServer(t, original, reordered, changed)
+	events, _ := poll(t, a, "")
+	if len(events) != 3 {
+		t.Fatalf("got %d events, want 3", len(events))
+	}
+	if events[0].EventID != events[1].EventID {
+		t.Errorf("the same record with its keys reordered got a new event_id (%s, %s): a serializer change would re-fire every event",
+			events[0].EventID, events[1].EventID)
+	}
+	if events[0].EventID == events[2].EventID {
+		t.Error("a record with one changed value kept the event_id: dedupe would swallow the revision")
+	}
+	//the fake server compacts what it serves, so that is the form that arrived.
+	//what matters is that the keys are still in the sender's order, not sorted.
+	var arrived bytes.Buffer
+	if err := json.Compact(&arrived, []byte(reordered)); err != nil {
+		t.Fatal(err)
+	}
+	if string(events[1].Raw) != arrived.String() {
+		t.Errorf("raw was canonicalized; it must be the record as it arrived:\n%s", events[1].Raw)
+	}
+}
+
 func poll1(t *testing.T, a *Adapter) event.Event {
 	t.Helper()
 	events, _ := poll(t, a, "")

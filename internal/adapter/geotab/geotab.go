@@ -405,15 +405,14 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 		return event.Event{}, fmt.Errorf("record has no id")
 	}
 
-	//event_id has to differ per revision, which is the whole point of it, and
-	//the version is what does that. the fallback exists because FaultData from a
-	//live Get was seen with no version; whether GetFeed sends one is unverified.
-	//there the record's own bytes stand in: a changed revision hashes
-	//differently and survives dedupe, and a verbatim resend does not.
+	//event_id has to differ per revision, which is the whole point of it.
+	//FaultData carries no per-record version, over Get or GetFeed: verified
+	//against a live database, so the hash is the normal path here. the version
+	//path stays because other entity types do carry one and a production feed
+	//may differ; when a record has a version, it wins.
 	revision, hashed := fd.Version, false
 	if revision == "" {
-		sum := sha256.Sum256(fd.raw)
-		revision, hashed = hex.EncodeToString(sum[:8]), true
+		revision, hashed = contentHash(fd.raw), true
 	}
 
 	e := event.Event{
@@ -571,6 +570,34 @@ func (a *Adapter) normalize(fd faultData, resolved map[string]map[string]Entity,
 		return e, fmt.Errorf("record %s: %w", fd.ID, err)
 	}
 	return e, nil
+}
+
+// contentHash is the revision of a record that has no version: a hash of what
+// the record says, not of how it was written down. hashing the bytes as
+// received would make key order part of the id, and nothing promises that order
+// across server versions or instances; the day it shifted, every event already
+// delivered would fire again as new. so the record is decoded and re-encoded,
+// which sorts the keys and drops the whitespace, and that is what gets hashed.
+// this is for the id only. raw is still emitted exactly as it arrived.
+//
+// a changed revision hashes differently and survives dedupe, and a resend that
+// says the same thing does not. the known limit, in docs/adapters.md: a fault
+// that clears and comes back identical in every field, dateTime included, is
+// the same content and is deduped.
+//
+// ponytail: numbers go through float64, so 1 and 1.0 are the same content,
+// which is the point, and two integers past 2^53 could collide, which FaultData
+// has none of. decode with UseNumber if a field like that ever appears.
+func contentHash(raw json.RawMessage) string {
+	canonical := []byte(raw)
+	var v any
+	if err := json.Unmarshal(raw, &v); err == nil {
+		if b, err := json.Marshal(v); err == nil {
+			canonical = b
+		}
+	}
+	sum := sha256.Sum256(canonical)
+	return hex.EncodeToString(sum[:8])
 }
 
 // set writes a tag only when there is something to write: an empty string tag

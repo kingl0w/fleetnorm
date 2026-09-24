@@ -41,10 +41,12 @@ database; none of it is in the entity reference. See
   and no longer show up as `geotab.unresolved`.
 - **A record with no `severity`** gets a documented `medium` rather than an
   accidental one, and no longer writes an empty `geotab.severity_raw`.
-- **A record with no `version` is no longer skipped.** The version is still the
-  primary path; without one the `event_id` revision is a hash of the record and
-  `geotab.event_id_source` is `hash`. Whether `GetFeed` sends a version on
-  FaultData is unverified, and docs/adapters.md says what follows if it does not.
+- **A record with no `version` is no longer skipped.** FaultData carries no
+  per-record version over `GetFeed`, verified against a live database, so this
+  was every record. The `event_id` revision is a hash of the record in canonical
+  form, so it depends on content and not on key order, and
+  `geotab.event_id_source` is `hash`. A record that does have a version still
+  uses it. docs/adapters.md has the known limitation and what is still theory.
 
 ### Changed
 
