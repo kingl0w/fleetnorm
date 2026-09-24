@@ -158,6 +158,7 @@ func (c *client) authenticate(ctx context.Context) (*session, error) {
 	if res.Path != "" && res.Path != thisServer {
 		url = endpoint(res.Path)
 	}
+	slog.Debug("geotab authenticated", "adapter", c.name, "path", res.Path, "server", url)
 	if url != c.url {
 		slog.Info("geotab session is on a different server than configured",
 			"adapter", c.name, "configured", c.url, "server", url)
@@ -185,6 +186,7 @@ func (c *client) feed(ctx context.Context, fromVersion string, fromDate time.Tim
 	if err := c.feed_.wait(ctx); err != nil {
 		return feedResult{}, err
 	}
+	slog.Debug("geotab GetFeed", "adapter", c.name, "params", params)
 	var out feedResult
 	if err := c.call(ctx, "GetFeed", params, &out); err != nil {
 		return feedResult{}, err
@@ -215,6 +217,7 @@ func (c *client) resolve(ctx context.Context, typeName string, ids []string) (ma
 	if err := c.get_.wait(ctx); err != nil {
 		return nil, err
 	}
+	slog.Debug("geotab Get", "adapter", c.name, "entity", typeName, "ids", ids)
 	//each Get returns an array; a multicall returns an array of those
 	var results [][]rawEntity
 	if err := c.call(ctx, "ExecuteMultiCall", map[string]any{"calls": calls}, &results); err != nil {
@@ -299,7 +302,11 @@ func (c *client) do(ctx context.Context, sess *session, method string, params ma
 		body[k] = v
 	}
 	body["credentials"] = sess.creds
-	return c.post(ctx, sess.url, method, body, out)
+	start := time.Now()
+	err := c.post(ctx, sess.url, method, body, out)
+	slog.Debug("geotab call", "adapter", c.name, "method", method, "server", sess.url,
+		"took", time.Since(start).Round(time.Millisecond).String(), "error", err)
+	return err
 }
 
 // post is the raw transport: one JSON-RPC request, one decoded result. it

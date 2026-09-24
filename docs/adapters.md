@@ -280,9 +280,10 @@ usually will, so this is almost certainly unreachable in practice. It is a real
 property of identifying a revision by its content rather than by a counter, and
 it is written here so that it is a known limit and not a surprise.
 
-**What the demo database cannot tell us.** It held 39 faults with `toVersion` at
-5. That is no evidence about behavior at volume, and no modified record has been
-observed being resent: nothing was dismissed and no `count` incremented while
+**What the demo database cannot tell us.** The first end-to-end run read 2760
+faults in one page, `toVersion` 2760, one revision per id: a simulator, not a
+fleet. That is no evidence about behavior at volume, and no modified record has
+been observed being resent: nothing was dismissed and no `count` incremented while
 anyone was watching. That `GetFeed` resends a FaultData record when it changes,
 which is the premise of this whole section, remains theory. If it turns out the
 feed never resends, the revision part of `event_id` is harmless but idle; if it

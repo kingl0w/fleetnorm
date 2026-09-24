@@ -13,6 +13,9 @@ on every event as `schema_version` and its stability promise lives in
 
 ### Added
 
+- **Debug logging for every MyGeotab call** at `-log-level debug`: the
+  Authenticate path, the GetFeed parameters, the ids sent to Get, and each
+  call's server and duration. Never credentials.
 - **Generated Geotab test fixtures.** `make fixtures` regenerates the synthetic
   FaultData in `internal/adapter/geotab/testdata` from
   `cmd/genfixtures`. Deterministic at a fixed seed, and a test fails if the
@@ -49,6 +52,12 @@ database; none of it is in the entity reference. See
   uses it. docs/adapters.md has the known limitation and what is still theory.
 
 ### Changed
+
+- **The Geotab adapter has been run end to end against a live MyGeotab
+  database** (2026-09-23): 2760 faults seeded in one page, cursor polls empty
+  with no replay, 21 enrichment lookups in two requests, no sentinel looked up,
+  every event delivered and audited. Redirects and resent revisions remain
+  unexercised.
 
 - The Geotab fixtures resolve against Diagnostic records captured from a live
   database, and the edge feed carries a captured FaultData record verbatim.

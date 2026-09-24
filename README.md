@@ -1,8 +1,9 @@
 # fleetnorm
 
-**v0.1.0** — event schema `0.1.0`. The Geotab adapter is written and tested
-against canned responses, but has **not yet been run against a live MyGeotab
-database**. Treat it as untried against a real feed until it has been.
+**v0.1.0** — event schema `0.1.0`. The Geotab adapter has been run end to end
+against a live MyGeotab database: seeded poll, cursor polls, enrichment, routing
+and audit, all verified on 2026-09-23. It has not yet run at production volume,
+and no fault revision has been observed being resent.
 
 A fleet that runs trucks from more than one manufacturer receives fault data in
 as many shapes as it has brands. International reports through OnCommand
@@ -187,8 +188,8 @@ event format, not about this binary.
 
 Milestone one is complete and tested: the file adapter, the stdout and webhook
 outputs, the router, the store and the schema. Milestone two adds the Geotab
-adapter, which is complete and tested against canned MyGeotab responses and has
-not yet run against a live database.
+adapter, which is complete, tested against generated fixtures, and has been run
+end to end against a live MyGeotab database.
 
 Further OEM and telematics adapters are additive: they implement the same
 interface the file adapter does.
