@@ -1065,3 +1065,25 @@ func TestLampStatusComesFromFaultLampState(t *testing.T) {
 		t.Errorf("%s must be absent, not an empty string", TagFaultLampState)
 	}
 }
+
+// a full page is the only sign GetFeed gives that more is waiting
+func TestFullPageReportsBacklog(t *testing.T) {
+	s, hc, _ := newServer(t, feed("v1", bareFault, enrichedFault), feed("v2", bareFault), feed("v3"))
+	_ = s
+	a := newAdapter(t, hc, func(o *Options) { o.ResultsLimit = 2 })
+	if a.Backlog() {
+		t.Fatal("backlog before any poll")
+	}
+	_, c := poll(t, a, "")
+	if !a.Backlog() {
+		t.Error("a page at results_limit should report a backlog")
+	}
+	_, c = poll(t, a, c)
+	if a.Backlog() {
+		t.Error("a partial page should not")
+	}
+	poll(t, a, c)
+	if a.Backlog() {
+		t.Error("an empty page should not")
+	}
+}

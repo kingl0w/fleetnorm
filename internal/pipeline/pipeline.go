@@ -2,9 +2,15 @@
 // deliver, and record every decision in the audit log.
 //
 // delivery is at least once. each output has its own goroutine and bounded
-// queue, so one slow endpoint cannot stall the others or block polling. a full
-// queue drops the event and says so in the audit log rather than pushing
-// backpressure all the way to the source.
+// queue, so one slow endpoint cannot stall the others or block polling. during
+// live polling a full queue drops the event and says so in the audit log rather
+// than pushing backpressure all the way to the source: a slow output must not
+// stall fresh faults. while an adapter reports a backlog the opposite holds:
+// the data is historical, nothing is urgent, and a full queue blocks the poller
+// instead, so a drain cannot drop by construction. that holds per output until
+// its queue has delivered everything the drain put there: a fresh fault
+// arriving behind historical ones is the more valuable of the two, and dropping
+// it to protect the backlog would be backwards.
 package pipeline
 
 import (
@@ -33,6 +39,15 @@ var (
 
 	//how often expired dedupe entries are swept, not the window itself
 	sweepInterval = time.Hour
+
+	//between pages of an eager drain. the adapter's own limiter is the real
+	//guard against its vendor's rate limit; this keeps an adapter without one
+	//from spinning, and leaves the geotab feed 20% under its 60/min.
+	eagerPause = 1200 * time.Millisecond
+
+	//consecutive eager pages before falling back to the tick, whatever the
+	//adapter says. a backlog that long is either enormous or a bug.
+	maxEagerPages = 500
 )
 
 // Source is one adapter and how often to poll it.
@@ -73,13 +88,57 @@ type dest struct {
 	out         output.Output
 	maxAttempts int
 	ch          chan queued
+
+	//outstanding counts events enqueued under backpressure that have not yet
+	//reached a terminal outcome. above zero, the queue is still working through
+	//a backlog and every enqueue to this output waits instead of dropping. the
+	//poller raises it and the worker lowers it, hence the lock.
+	mu          sync.Mutex
+	outstanding int
+	since       time.Time     //when outstanding last left zero
+	blockedFor  time.Duration //total time spent above zero, for the log
+}
+
+// behind reports whether this output is still delivering a backlog.
+func (d *dest) behind() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.outstanding > 0
+}
+
+// track counts one event enqueued under backpressure. it runs before the
+// enqueue, so the worker can never settle an event that was not yet tracked.
+func (d *dest) track() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.outstanding == 0 {
+		d.since = time.Now()
+		slog.Debug("output entered blocking mode", "output", d.name)
+	}
+	d.outstanding++
+}
+
+// settle counts one tracked event reaching any terminal outcome: delivered,
+// failed, or dropped at shutdown. every outcome counts, or the counter would
+// never return to zero and the output would block forever.
+func (d *dest) settle() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.outstanding--
+	if d.outstanding == 0 {
+		took := time.Since(d.since)
+		d.blockedFor += took
+		slog.Debug("output left blocking mode", "output", d.name,
+			"after", took.Round(time.Millisecond).String())
+	}
 }
 
 // queued is an event on its way to one output, carrying the label of the rule
 // that sent it there so the audit row written at delivery time can name it.
 type queued struct {
-	event event.Event
-	rule  string
+	event   event.Event
+	rule    string
+	tracked bool //counted in dest.outstanding; the worker settles it
 }
 
 func New(o Options) (*Pipeline, error) {
@@ -189,7 +248,11 @@ func (p *Pipeline) poll(ctx context.Context, s Source) {
 	tick := time.NewTicker(s.Interval)
 	defer tick.Stop()
 	for {
-		cursor = p.pollOnce(ctx, s.Adapter, cursor)
+		r := p.pollOnce(ctx, s.Adapter, cursor, false)
+		if r.ok && r.backlog {
+			r = p.drain(ctx, s.Adapter, r)
+		}
+		cursor = r.cursor
 		select {
 		case <-ctx.Done():
 			return
@@ -198,22 +261,39 @@ func (p *Pipeline) poll(ctx context.Context, s Source) {
 	}
 }
 
-// pollOnce returns the cursor to use next: the new one on success, the one it
-// was given on failure.
-func (p *Pipeline) pollOnce(ctx context.Context, a adapter.Adapter, cursor string) string {
+// pollResult is what one poll left behind.
+type pollResult struct {
+	cursor  string        //the one to use next: new on success, unchanged on failure
+	ok      bool          //the poll succeeded
+	backlog bool          //the adapter says there is more behind this page
+	events  int           //events the page produced
+	blocked time.Duration //time spent waiting on full output queues
+}
+
+// pollOnce runs one poll and dispatches what it returned. block says whether a
+// full output queue waits or drops; a page the adapter reports as part of a
+// backlog always waits, whatever the caller said.
+func (p *Pipeline) pollOnce(ctx context.Context, a adapter.Adapter, cursor string, block bool) pollResult {
 	name := a.Name()
 	events, next, err := a.Poll(ctx, adapter.Cursor(cursor))
 	if err != nil {
-		if ctx.Err() != nil {
-			return cursor //shutting down, not a failure worth reporting
+		if ctx.Err() == nil { //shutting down is not a failure worth reporting
+			p.opts.Metrics.inc(MetricPollErrors, labels("adapter", name))
+			slog.Error("poll failed", "adapter", name, "error", err)
 		}
-		p.opts.Metrics.inc(MetricPollErrors, labels("adapter", name))
-		slog.Error("poll failed", "adapter", name, "error", err)
-		return cursor
+		return pollResult{cursor: cursor}
 	}
+	r := pollResult{cursor: string(next), ok: true, events: len(events)}
+	if b, ok := a.(adapter.Backlogger); ok {
+		r.backlog = b.Backlog()
+	}
+	//a full page means a backlog is being worked through, and a backlog is
+	//delivered with backpressure rather than dropped: the data is historical,
+	//and there is no reason to fetch faster than it can be delivered
+	block = block || r.backlog
 	for _, e := range events {
 		p.opts.Metrics.inc(MetricPolled, labels("adapter", name))
-		p.dispatch(ctx, name, e)
+		r.blocked += p.dispatch(ctx, name, e, block)
 	}
 	if string(next) != cursor {
 		//losing a cursor means replaying, which dedupe absorbs
@@ -221,12 +301,59 @@ func (p *Pipeline) pollOnce(ctx context.Context, a adapter.Adapter, cursor strin
 			slog.Error("cannot save adapter cursor", "adapter", name, "error", err)
 		}
 	}
-	return string(next)
+	return r
+}
+
+// drain keeps polling while the adapter reports a backlog, without waiting for
+// the tick. it stops on the first page that fails, that does not move the
+// cursor, or that the adapter says is the last, and on the page cap. a stop
+// for any reason hands control back to the tick: the next attempt is a normal
+// poll, and the backlog resumes from there if it is still one.
+func (p *Pipeline) drain(ctx context.Context, a adapter.Adapter, first pollResult) pollResult {
+	name := a.Name()
+	start := time.Now()
+	pages, events, blocked := 1, first.events, first.blocked
+	slog.Info("adapter reports a backlog, draining eagerly", "adapter", name, "cursor", first.cursor)
+
+	r := first
+	for r.backlog && pages < maxEagerPages {
+		if !sleep(ctx, eagerPause) {
+			break
+		}
+		prev := r.cursor
+		r = p.pollOnce(ctx, a, prev, true)
+		if !r.ok {
+			//guard 2: a failed poll ends the sequence and the tick retries it
+			break
+		}
+		pages++
+		events += r.events
+		blocked += r.blocked
+		slog.Debug("eager page", "adapter", name, "page", pages, "events", r.events,
+			"blocked", r.blocked.Round(time.Millisecond).String(), "cursor", r.cursor)
+		if r.cursor == prev {
+			//guard 1: a backlog that does not move the cursor is not one that
+			//polling again will clear
+			slog.Warn("adapter reports a backlog but the cursor did not advance, waiting for the tick",
+				"adapter", name, "cursor", r.cursor)
+			break
+		}
+	}
+	if r.backlog && pages >= maxEagerPages {
+		slog.Warn("eager page cap reached with a backlog still reported, waiting for the tick",
+			"adapter", name, "pages", pages)
+	}
+	slog.Info("eager drain finished", "adapter", name, "pages", pages, "events", events,
+		"blocked", blocked.Round(time.Millisecond).String(),
+		"took", time.Since(start).Round(time.Millisecond).String(), "cursor", r.cursor)
+	return r
 }
 
 // dispatch deduplicates one event, routes it, and queues it for each
 // destination. every outcome that is not a delivery attempt is audited here.
-func (p *Pipeline) dispatch(ctx context.Context, adapterName string, e event.Event) {
+// with block set, a full queue waits instead of dropping; the time spent
+// waiting is returned so a drain can say how much backpressure it met.
+func (p *Pipeline) dispatch(ctx context.Context, adapterName string, e event.Event, block bool) time.Duration {
 	//ponytail: marked seen before delivery, so a crash in between loses the event
 	//rather than duplicating it. the fix is a durable queue, not a reordering:
 	//marking afterwards only moves the window.
@@ -236,7 +363,7 @@ func (p *Pipeline) dispatch(ctx context.Context, adapterName string, e event.Eve
 	} else if !isNew {
 		p.opts.Metrics.inc(MetricDuplicate, labels("adapter", adapterName))
 		slog.Debug("duplicate event dropped", "adapter", adapterName, "event_id", e.EventID)
-		return
+		return 0
 	}
 
 	targets := p.opts.Router.Route(e)
@@ -244,23 +371,48 @@ func (p *Pipeline) dispatch(ctx context.Context, adapterName string, e event.Eve
 		p.opts.Metrics.inc(MetricUnrouted, "")
 		//no rule matched, so there is no rule label to record
 		p.audit(ctx, e, "", "", store.StatusDropped, 0, "no matching rule")
-		return
+		return 0
 	}
+	var blocked time.Duration
 	for _, t := range targets {
 		d := p.dests[t.Output]
 		if d == nil { //config validation should have caught this
 			p.audit(ctx, e, t.Output, t.Rule, store.StatusDropped, 0, "no such output")
 			continue
 		}
+		//a backlog page waits, and so does anything enqueued while this output
+		//is still delivering one: a fresh fault behind historical ones is the
+		//more valuable of the two
+		q := queued{event: e, rule: t.Rule, tracked: block || d.behind()}
+		if q.tracked {
+			d.track()
+		}
 		select {
-		case d.ch <- queued{event: e, rule: t.Rule}:
-		//dropping beats blocking the poller behind one slow endpoint
+		case d.ch <- q:
+			continue
 		default:
+		}
+		//the queue is full. live polling drops: dropping beats blocking the
+		//poller behind one slow endpoint when fresh faults are behind it.
+		if !q.tracked {
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", t.Output, "status", string(store.StatusDropped)))
 			p.audit(ctx, e, t.Output, t.Rule, store.StatusDropped, 0, "output queue full")
 			slog.Warn("output queue full, event dropped", "output", t.Output, "event_id", e.EventID, "rule", t.Rule)
+			continue
+		}
+		//the only way out without an enqueue is shutdown, and that is audited
+		//as what it is rather than as a full queue
+		start := time.Now()
+		select {
+		case d.ch <- q:
+			blocked += time.Since(start)
+		case <-ctx.Done():
+			d.settle()
+			p.opts.Metrics.inc(MetricDeliveries, labels("output", t.Output, "status", string(store.StatusDropped)))
+			p.audit(ctx, e, t.Output, t.Rule, store.StatusDropped, 0, "shut down before delivery")
 		}
 	}
+	return blocked
 }
 
 func (p *Pipeline) work(ctx context.Context, d *dest) {
@@ -270,9 +422,13 @@ func (p *Pipeline) work(ctx context.Context, d *dest) {
 		if ctx.Err() != nil {
 			p.opts.Metrics.inc(MetricDeliveries, labels("output", d.name, "status", string(store.StatusDropped)))
 			p.audit(ctx, q.event, d.name, q.rule, store.StatusDropped, 0, "shut down before delivery")
-			continue
+		} else {
+			p.deliver(ctx, d, q)
 		}
-		p.deliver(ctx, d, q)
+		//every path above is terminal, so this is the one place to settle
+		if q.tracked {
+			d.settle()
+		}
 	}
 }
 

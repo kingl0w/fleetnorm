@@ -19,8 +19,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	//no test should wait out a real backoff.
+	//no test should wait out a real backoff, or a real eager pause.
 	baseBackoff, maxBackoff = time.Millisecond, 5*time.Millisecond
+	eagerPause = time.Millisecond
 	m.Run()
 }
 
@@ -45,6 +46,8 @@ type fakeAdapter struct {
 	batches [][]event.Event
 	polls   int
 	err     error
+	failOn  int  //fail this poll number only
+	stuck   bool //never advance the cursor
 }
 
 func (f *fakeAdapter) Name() string { return f.name }
@@ -53,15 +56,55 @@ func (f *fakeAdapter) Poll(context.Context, adapter.Cursor) ([]event.Event, adap
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.polls++
-	if f.err != nil {
-		return nil, "", f.err
+	if f.err != nil || f.polls == f.failOn {
+		return nil, "", errors.New("poll failed")
+	}
+	cursor := adapter.Cursor(strconv.Itoa(f.polls))
+	if f.stuck {
+		cursor = "same"
 	}
 	if len(f.batches) == 0 {
-		return nil, adapter.Cursor(strconv.Itoa(f.polls)), nil
+		return nil, cursor, nil
 	}
 	batch := f.batches[0]
 	f.batches = f.batches[1:]
-	return batch, adapter.Cursor(strconv.Itoa(f.polls)), nil
+	return batch, cursor, nil
+}
+
+func (f *fakeAdapter) pollCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.polls
+}
+
+// backlogAdapter reports a backlog on the first pages polls, or always.
+type backlogAdapter struct {
+	*fakeAdapter
+	pages  int
+	always bool
+}
+
+func (b *backlogAdapter) Backlog() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.always || b.polls <= b.pages
+}
+
+func batches(pages, size int) [][]event.Event {
+	var out [][]event.Event
+	for p := range pages {
+		var batch []event.Event
+		for i := range size {
+			batch = append(batch, testEvent(fmt.Sprintf("p%02d-e%02d", p, i)))
+		}
+		out = append(out, batch)
+	}
+	return out
+}
+
+// a source polled once an hour, so only the eager loop can finish in time
+func hourly(a adapter.Adapter) []Source {
+	return []Source{{Adapter: a, Interval: time.Hour}}
 }
 
 // fakeOutput records what it receives and can be told to misbehave.
@@ -723,4 +766,159 @@ func TestAuditSweep(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBacklogDrainsWithoutWaitingForTheTick(t *testing.T) {
+	console := newFakeOutput("console")
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "paged", batches: batches(4, 5)}, pages: 3}
+	h := newHarness(t, catchAll("console"), hourly(a), []Destination{destination(console, 64, 1)})
+	h.run(map[*fakeOutput]int{console: 20})
+	//three full pages, then the partial one that ends the sequence
+	if got := a.pollCount(); got != 4 {
+		t.Errorf("polled %d times, want 4: every page in one sequence", got)
+	}
+}
+
+// the whole point: a backlog against a queue far smaller than a page, and a
+// slow output, loses nothing. compare TestFullQueueDropsAndAudits.
+func TestBacklogIsDeliveredWithBackpressure(t *testing.T) {
+	slow := newFakeOutput("slow")
+	slow.delay = 2 * time.Millisecond
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "paged", batches: batches(3, 20)}, pages: 2}
+	h := newHarness(t, catchAll("slow"), hourly(a), []Destination{destination(slow, 2, 1)})
+	h.run(map[*fakeOutput]int{slow: 60})
+
+	if got := h.Metrics().Count(MetricDeliveries, labels("output", "slow", "status", "dropped")); got != 0 {
+		t.Fatalf("%d events dropped during a drain; backpressure should make that impossible", got)
+	}
+	for p := range 3 {
+		for i := range 20 {
+			id := fmt.Sprintf("p%02d-e%02d", p, i)
+			recs := h.auditFor(id)
+			if len(recs) != 1 || recs[0].Status != store.StatusDelivered {
+				t.Errorf("%s: audit %+v, want one delivered row", id, recs)
+			}
+		}
+	}
+}
+
+func TestBacklogStopsWhenTheCursorDoesNotAdvance(t *testing.T) {
+	console := newFakeOutput("console")
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "stuck", stuck: true}, always: true}
+	h := newHarness(t, catchAll("console"), hourly(a), []Destination{destination(console, 8, 1)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+	waitFor(t, func() bool { return a.pollCount() >= 2 })
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+	//the first poll, then one eager page that did not move the cursor
+	if got := a.pollCount(); got != 2 {
+		t.Errorf("polled %d times, want 2: a stuck cursor must not be polled in a loop", got)
+	}
+}
+
+func TestBacklogEndsOnPollError(t *testing.T) {
+	console := newFakeOutput("console")
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "flaky", batches: batches(5, 1), failOn: 2}, pages: 5}
+	h := newHarness(t, catchAll("console"), hourly(a), []Destination{destination(console, 8, 1)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+	waitFor(t, func() bool { return a.pollCount() >= 2 })
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+	if got := a.pollCount(); got != 2 {
+		t.Errorf("polled %d times, want 2: a failed page waits for the tick", got)
+	}
+	if got := h.Metrics().Count(MetricPollErrors, labels("adapter", "flaky")); got != 1 {
+		t.Errorf("poll errors = %d, want 1", got)
+	}
+}
+
+func TestBacklogPageCap(t *testing.T) {
+	defer func(n int) { maxEagerPages = n }(maxEagerPages)
+	maxEagerPages = 3
+	console := newFakeOutput("console")
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "endless"}, always: true}
+	h := newHarness(t, catchAll("console"), hourly(a), []Destination{destination(console, 8, 1)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+	waitFor(t, func() bool { return a.pollCount() >= 3 })
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	<-done
+	if got := a.pollCount(); got != 3 {
+		t.Errorf("polled %d times, want 3: the cap counts the sequence", got)
+	}
+}
+
+// the tail of a drain: fetching has stopped, the slow output is still working
+// through what the drain queued, and a live tick brings a fresh event. with a
+// two slot queue it would drop; instead it waits its turn and is delivered.
+func TestLiveEventBlocksWhileOutputIsBehind(t *testing.T) {
+	slow := newFakeOutput("slow")
+	slow.delay = 5 * time.Millisecond
+	//one backlog page, one empty eager page that ends the drain, then a live
+	//tick 10ms later while the 100ms of backlog is still in the queue
+	pages := [][]event.Event{batches(1, 20)[0], {}, {testEvent("fresh")}}
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "paged", batches: pages}, pages: 1}
+	h := newHarness(t, catchAll("slow"), source(a), []Destination{destination(slow, 2, 1)})
+	h.run(map[*fakeOutput]int{slow: 21})
+
+	if got := h.Metrics().Count(MetricDeliveries, labels("output", "slow", "status", "dropped")); got != 0 {
+		t.Fatalf("%d events dropped; a fresh event behind a backlog must wait, not drop", got)
+	}
+	if recs := h.auditFor("fresh"); len(recs) != 1 || recs[0].Status != store.StatusDelivered {
+		t.Errorf("fresh event audit %+v, want one delivered row", recs)
+	}
+	d := h.dests["slow"]
+	if d.behind() {
+		t.Error("output still in blocking mode after everything was delivered")
+	}
+	if d.blockedFor == 0 {
+		t.Error("output never entered blocking mode, so the test proved nothing")
+	}
+}
+
+func TestPermanentFailureStillSettles(t *testing.T) {
+	rejecting := newFakeOutput("rejecting")
+	rejecting.permanent = true
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "paged", batches: batches(1, 5)}, pages: 1}
+	h := newHarness(t, catchAll("rejecting"), hourly(a), []Destination{destination(rejecting, 2, 3)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+	waitFor(t, func() bool {
+		return h.Metrics().Count(MetricDeliveries, labels("output", "rejecting", "status", "failed")) == 5
+	})
+	waitFor(t, func() bool { return !h.dests["rejecting"].behind() })
+	cancel()
+	<-done
+	if h.dests["rejecting"].behind() {
+		t.Error("five permanent failures left the output in blocking mode")
+	}
+}
+
+func TestOutputsLeaveBlockingModeIndependently(t *testing.T) {
+	fast, slow := newFakeOutput("fast"), newFakeOutput("slow")
+	slow.delay = 5 * time.Millisecond
+	pages := [][]event.Event{batches(1, 20)[0], {}}
+	a := &backlogAdapter{fakeAdapter: &fakeAdapter{name: "paged", batches: pages}, pages: 1}
+	h := newHarness(t, catchAll("fast", "slow"), hourly(a),
+		[]Destination{destination(fast, 2, 1), destination(slow, 2, 1)})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.Run(ctx) }()
+
+	waitFor(t, func() bool { return len(fast.events()) == 20 && !h.dests["fast"].behind() })
+	if !h.dests["slow"].behind() {
+		t.Error("the slow output left blocking mode with most of its backlog still queued")
+	}
+	waitFor(t, func() bool { return len(slow.events()) == 20 && !h.dests["slow"].behind() })
+	cancel()
+	<-done
 }

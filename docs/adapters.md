@@ -16,6 +16,43 @@ deduplication, so it has to be stable across restarts. Renaming an adapter in th
 config makes fleetnorm forget how far it had read and what it had already
 delivered.
 
+## Reporting a backlog
+
+```go
+type Backlogger interface {
+    Backlog() bool
+}
+```
+
+This is optional. An adapter that can tell it left records behind, because the
+source paged and the page came back full, implements it. After every successful
+poll the pipeline checks it, and while it answers true polls again after a short
+pause instead of waiting for `poll_interval`. Pages read that way are delivered
+with backpressure: a full output queue makes the poller wait rather than drop,
+because the data is historical and there is no reason to fetch it faster than it
+can be delivered. Live polling keeps drop-on-full, so a slow output never stalls
+fresh faults.
+
+A drain is not over when fetching stops. It is over, per output, when that
+output has delivered everything the drain queued. Until then every enqueue to
+that output waits, live ticks included: a fresh fault arriving behind historical
+ones is the more valuable of the two, and dropping it to protect the backlog
+would be backwards. A fast output leaves that mode as soon as it catches up,
+whatever a slower one is still doing. Every terminal outcome counts as caught
+up, a permanent failure as much as a delivery, so the mode cannot stick.
+
+`Backlog` is a stateful side channel. It describes the most recent `Poll`, and
+the pipeline reads it right after `Poll` returns, on the goroutine that called
+it. That is the one goroutine per adapter model the pipeline runs, and it is
+the only model under which the answer means anything: two goroutines polling
+one adapter would each read the other's. Do not lock it, and do not call it
+from anywhere else.
+
+The pipeline guards the loop, not the adapter. It stops when a poll fails, when
+the cursor stops moving, when the adapter says the page was the last, and after
+500 consecutive pages. Every stop hands control back to the tick, and the next
+normal poll picks the backlog up again if it is still one.
+
 ## The cursor
 
 ```go
@@ -744,6 +781,16 @@ Rate limits are respected with a client side limiter rather than discovered by
 being throttled: `GetFeed` is paced to 60 calls a minute and `Get` to 500.
 `poll_interval` is config driven with a documented minimum of one second, which
 is what the `GetFeed` limit allows.
+
+A page that comes back with exactly `results_limit` records is reported as a
+backlog, and the pipeline reads the next page after 1.2 seconds instead of
+waiting out `poll_interval`. The pause is the pipeline's; the client's own
+limiter still applies underneath it. Geotab's rate limit guide names the
+per-minute limits and the `X-Rate-Limit-Reset` header but never says whether
+the window is fixed or sliding, so no burst is assumed and the pace stays under
+the limit either way. A backlog of 2760 faults at `results_limit: 100` drains in
+under a minute of fetching; how long delivery takes is up to the outputs, which
+the drain waits for rather than overruns.
 
 ### Config
 

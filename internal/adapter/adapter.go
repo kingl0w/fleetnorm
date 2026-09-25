@@ -24,6 +24,19 @@ type Adapter interface {
 	Poll(ctx context.Context, since Cursor) ([]event.Event, Cursor, error)
 }
 
+// Backlogger is optional. an adapter that can tell it left records behind
+// implements it, and the pipeline polls again right away instead of waiting for
+// the tick, delivering with backpressure instead of drop-on-full.
+//
+// Backlog is a stateful side channel: it describes the most recent Poll and is
+// read right after Poll returns, on the goroutine that called it. that is the
+// one goroutine per adapter model the pipeline uses, and it is the only model
+// this is valid under. calling Poll and Backlog from different goroutines reads
+// someone else's answer.
+type Backlogger interface {
+	Backlog() bool
+}
+
 // Skipped is a record an adapter could not turn into an event.
 type Skipped struct {
 	Adapter string //the adapter that read it

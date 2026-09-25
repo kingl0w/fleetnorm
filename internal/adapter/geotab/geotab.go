@@ -178,6 +178,9 @@ type Adapter struct {
 	limit    int
 	onSkip   adapter.SkipFunc
 	now      func() time.Time //swapped in tests
+
+	//whether the last Poll returned a full page. see Backlog.
+	backlog bool
 }
 
 func New(o Options) (*Adapter, error) {
@@ -233,6 +236,7 @@ func (a *Adapter) Poll(ctx context.Context, since adapter.Cursor) ([]event.Event
 	if err := ctx.Err(); err != nil {
 		return nil, since, err
 	}
+	a.backlog = false
 	received := a.now().UTC()
 
 	//fromDate seeds a cold start and is used only there. once a cursor exists,
@@ -290,8 +294,18 @@ func (a *Adapter) Poll(ctx context.Context, since adapter.Cursor) ([]event.Event
 		slog.Info("geotab feed seeded", "adapter", a.name, "from_date", seed.Format(time.RFC3339),
 			"events", len(events), "skipped", len(skips))
 	}
+	//a full page is the only sign GetFeed gives that more is waiting. a page
+	//exactly at the limit with nothing behind it costs one extra empty poll.
+	a.backlog = len(res.Data) >= a.limit
 	return events, adapter.Cursor(res.ToVersion), nil
 }
+
+// Backlog reports whether the last Poll returned a full page, which means the
+// feed has more behind it. it implements adapter.Backlogger and carries its
+// rules: it describes the most recent Poll, is read right after Poll returns,
+// and only on the goroutine that called Poll. there is no lock here on purpose;
+// a second goroutine polling this adapter is already wrong.
+func (a *Adapter) Backlog() bool { return a.backlog }
 
 // skip names a record for the audit log, by its Geotab id when it parsed and by
 // its position in the page when it did not.
