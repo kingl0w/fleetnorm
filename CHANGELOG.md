@@ -13,6 +13,17 @@ on every event as `schema_version` and its stability promise lives in
 
 ### Added
 
+- **Eager draining of a backlog.** A page that comes back with exactly
+  `results_limit` records is reported through the optional `Backlogger`
+  interface, and the pipeline polls again after 1.2s instead of waiting out
+  `poll_interval`. The loop stops on a failed poll, a cursor that did not
+  move, and after 500 pages, and every stop hands control back to the tick.
+- **Backpressure for a drain.** Pages read eagerly are delivered with a full
+  queue making the poller wait rather than drop. A drain is over, per output,
+  when that output has delivered everything the drain queued; until then every
+  enqueue to it waits, live ticks included. A fast output leaves that mode as
+  soon as it catches up, whatever a slower one is still doing. Live polling
+  outside a drain keeps drop-on-full.
 - **Debug logging for every MyGeotab call** at `-log-level debug`: the
   Authenticate path, the GetFeed parameters, the ids sent to Get, and each
   call's server and duration. Never credentials.
@@ -51,6 +62,12 @@ database; none of it is in the entity reference. See
   `geotab.event_id_source` is `hash`. A record that does have a version still
   uses it. docs/adapters.md has the known limitation and what is still theory.
 
+- **A read is retried once after a transport error.** Go will not retry a POST
+  on a reused connection, so a keep-alive the server dropped between polls
+  surfaced as a reset or EOF and failed the poll. Only `Get`, `GetFeed` and
+  `ExecuteMultiCall` are retried, only on the round-trip error, and never on a
+  timeout, a cancelled context, or a JSON-RPC error.
+
 ### Changed
 
 - **The Geotab adapter has been run end to end against a live MyGeotab
@@ -58,6 +75,18 @@ database; none of it is in the entity reference. See
   with no replay, 21 enrichment lookups in two requests, no sentinel looked up,
   every event delivered and audited. Redirects and resent revisions remain
   unexercised.
+
+- **Eager draining and backpressure have been run against the live database**
+  (2026-09-25), from a cold start at `results_limit: 100`. With console as the
+  only output: 29 pages, 2839 events, drained in 42.4s, blocked 0s, console
+  left blocking mode in milliseconds, 2839 delivered, no drops, no errors,
+  clean shutdown. With a webhook answering after 200ms added: the same 29
+  pages and 2839 events, the drain took 8m38s of which 7m53s was blocked on
+  the full webhook queue, console left blocking mode in milliseconds and the
+  webhook after 9m30s, 2839 delivered to both outputs, no drops, no errors,
+  clean shutdown. The webhook staying in blocking mode past the end of
+  fetching is the tail working: under the old rule those last minutes would
+  have been drop-on-full with a queue still full of backlog.
 
 - The Geotab fixtures resolve against Diagnostic records captured from a live
   database, and the edge feed carries a captured FaultData record verbatim.
