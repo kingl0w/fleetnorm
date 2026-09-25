@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -309,6 +310,17 @@ func (c *client) do(ctx context.Context, sess *session, method string, params ma
 	return err
 }
 
+// readMethods are the calls safe to repeat after a transport error: a reset
+// arriving after the server processed one of these costs a duplicate read, not
+// a duplicate write. ExecuteMultiCall is here because resolve only ever puts
+// Gets in it. a Set or Add must stay out: the reset may have come after the
+// write landed.
+var readMethods = map[string]bool{"Get": true, "GetFeed": true, "ExecuteMultiCall": true}
+
+// retryDelay is fixed on purpose: this is to survive a kept-alive connection
+// the server dropped between polls, not to wait out an outage.
+const retryDelay = 250 * time.Millisecond
+
 // post is the raw transport: one JSON-RPC request, one decoded result. it
 // knows nothing about sessions, so authenticate can use it too.
 func (c *client) post(ctx context.Context, url, method string, params map[string]any, out any) error {
@@ -316,13 +328,26 @@ func (c *client) post(ctx context.Context, url, method string, params map[string
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
+	send := func() (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		return c.http.Do(req)
 	}
-	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.http.Do(req)
+	resp, err := send()
+	//Go will not retry a POST on a reused connection, so a stale keep-alive
+	//surfaces here as a reset or EOF. one retry, on the round-trip error only:
+	//a response that decodes to a JSON-RPC error is the server answering and
+	//is never retried. a timeout or a cancelled context is not a stale
+	//connection either.
+	if err != nil && readMethods[method] && ctx.Err() == nil && !isTimeout(err) {
+		slog.Debug("geotab retrying after transport error", "adapter", c.name, "method", method, "error", err)
+		time.Sleep(retryDelay)
+		resp, err = send()
+	}
 	if err != nil {
 		return fmt.Errorf("%s: %w", method, err)
 	}
@@ -351,6 +376,11 @@ func (c *client) post(ctx context.Context, url, method string, params map[string
 		return fmt.Errorf("%s: unexpected result shape: %w", method, err)
 	}
 	return nil
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // isInvalidUser reports whether err is the server saying the session or the

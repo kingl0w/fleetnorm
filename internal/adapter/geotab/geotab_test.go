@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1063,6 +1064,62 @@ func TestLampStatusComesFromFaultLampState(t *testing.T) {
 	}
 	if _, set := absent.Tags[TagFaultLampState]; set {
 		t.Errorf("%s must be absent, not an empty string", TagFaultLampState)
+	}
+}
+
+// flaky serves a JSON-RPC result, but drops the connection on the first
+// request when dropFirst is set: what a kept-alive connection the server
+// closed between polls looks like to Go's client.
+func flaky(t *testing.T, dropFirst bool, body string) (*httptest.Server, *atomic.Int32) {
+	t.Helper()
+	var n atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 && dropFirst {
+			conn, _, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn.Close()
+			return
+		}
+		io.WriteString(w, body)
+	}))
+	t.Cleanup(ts.Close)
+	return ts, &n
+}
+
+func TestReadRetriesOnceOnTransportError(t *testing.T) {
+	ts, n := flaky(t, true, `{"result":{"toVersion":"v2"}}`)
+	c := newClient("t", ts.URL, "db", "u", "p", time.Second, nil)
+	var out feedResult
+	if err := c.post(context.Background(), c.url, "GetFeed", nil, &out); err != nil {
+		t.Fatalf("want the retry to succeed, got %v", err)
+	}
+	if out.ToVersion != "v2" || n.Load() != 2 {
+		t.Errorf("got toVersion %q after %d requests, want v2 after 2", out.ToVersion, n.Load())
+	}
+}
+
+func TestJSONRPCErrorIsNotRetried(t *testing.T) {
+	ts, n := flaky(t, false, `{"error":{"message":"nope","errors":[{"name":"ArgumentException","message":"nope"}]}}`)
+	c := newClient("t", ts.URL, "db", "u", "p", time.Second, nil)
+	err := c.post(context.Background(), c.url, "GetFeed", nil, &struct{}{})
+	if !strings.Contains(fmt.Sprint(err), "ArgumentException") {
+		t.Fatalf("want the server's error, got %v", err)
+	}
+	if n.Load() != 1 {
+		t.Errorf("%d requests, want 1: the server answered", n.Load())
+	}
+}
+
+func TestWriteIsNotRetried(t *testing.T) {
+	ts, n := flaky(t, true, `{"result":"ok"}`)
+	c := newClient("t", ts.URL, "db", "u", "p", time.Second, nil)
+	if err := c.post(context.Background(), c.url, "Set", nil, &struct{}{}); err == nil {
+		t.Fatal("want the transport error to surface")
+	}
+	if n.Load() != 1 {
+		t.Errorf("%d requests, want 1: a reset after a write may mean the write landed", n.Load())
 	}
 }
 
