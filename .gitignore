@@ -5,4 +5,7 @@ dist/
 *.db-wal
 configs/geotab-live.yaml
 configs/geotab-live-paging.yaml
-live/
+live/*.log
+live/*.events.jsonl
+live/*.metrics
+live/fleetnorm

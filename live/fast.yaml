@@ -1,0 +1,22 @@
+# fast run: console only, an output that keeps up. expect blocked 0s.
+adapters:
+  - type: geotab
+    name: geotab-demo
+    database: demo_fleetnorm_dev
+    username_env: GEOTAB_USER
+    password_env: GEOTAB_PASS
+    seed_from: 2026-08-01T00:00:00Z
+    poll_interval: 30s
+    results_limit: 100
+
+outputs:
+  - type: stdout
+    name: console
+
+rules:
+  - name: everything
+    match: {}
+    route: [console]
+
+store:
+  path: ./fast.db

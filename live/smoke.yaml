@@ -1,0 +1,17 @@
+adapters:
+  - type: file
+    name: replay
+    path: ../testdata/events.json
+    poll_interval: 3s
+outputs:
+  - type: stdout
+    name: console
+  - type: webhook
+    name: slow
+    url: http://127.0.0.1:9009/
+rules:
+  - name: everything
+    match: {}
+    route: [console, slow]
+store:
+  path: ./smoke.db

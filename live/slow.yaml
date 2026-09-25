@@ -1,0 +1,27 @@
+# slow run: console plus a webhook that answers after SLOW_DELAY seconds
+# (slow.py). expect the slow queue to fill, the drain to block, console to
+# leave blocking mode in milliseconds and slow to leave it minutes later.
+adapters:
+  - type: geotab
+    name: geotab-demo
+    database: demo_fleetnorm_dev
+    username_env: GEOTAB_USER
+    password_env: GEOTAB_PASS
+    seed_from: 2026-08-01T00:00:00Z
+    poll_interval: 30s
+    results_limit: 100
+
+outputs:
+  - type: stdout
+    name: console
+  - type: webhook
+    name: slow
+    url: http://127.0.0.1:9009/
+
+rules:
+  - name: everything
+    match: {}
+    route: [console, slow]
+
+store:
+  path: ./slow.db
