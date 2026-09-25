@@ -4,3 +4,5 @@ dist/
 *.db-shm
 *.db-wal
 configs/geotab-live.yaml
+configs/geotab-live-paging.yaml
+live/
